@@ -36,13 +36,6 @@ on:
         default: ""
         type: string
       
-      # 改为 string 类型，多行用 \n 分隔
-      release_notes:
-        description: "更新说明（支持 \\n 换行，例如：修复Bug\\n优化性能）"
-        required: false
-        default: ""
-        type: string
-      
       force_recreate:
         description: "如果 Release 已存在，是否强制更新"
         required: false
@@ -55,9 +48,8 @@ jobs:
     outputs:
       version: ${{ steps.set-version.outputs.version }}
       title: ${{ steps.set-title.outputs.title }}
-      notes: ${{ steps.set-notes.outputs.notes }}
     steps:
-      - name: 确定版本号
+      - name: 准备版本信息
         id: set-version
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
@@ -66,45 +58,23 @@ jobs:
             VERSION="${{ inputs.version }}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "构建版本: $VERSION"
       
-      - name: 确定 Release 标题
+      - name: 准备标题
         id: set-title
         run: |
-          if [ "${{ github.event_name }}" == "push" ]; then
-            TITLE="${{ steps.set-version.outputs.version }}"
-          elif [ -n "${{ inputs.release_title }}" ]; then
+          if [ -n "${{ inputs.release_title }}" ]; then
             TITLE="${{ inputs.release_title }}"
           else
-            TITLE="${{ inputs.version }}"
+            TITLE="${{ steps.set-version.outputs.version }}"
           fi
           echo "title=$TITLE" >> $GITHUB_OUTPUT
-      
-      - name: 确定更新说明
-        id: set-notes
-        run: |
-          BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-          
-          if [ "${{ github.event_name }}" == "push" ]; then
-            NOTES="自动构建发布 - 时间：${BUILD_TIME}"
-          elif [ -n "${{ inputs.release_notes }}" ]; then
-            # 将输入的 \n 转换为真实换行
-            NOTES=$(echo "${{ inputs.release_notes }}" | sed 's/\\n/\n/g')
-          else
-            NOTES="手动构建发布 - 时间：${BUILD_TIME}"
-          fi
-          
-          # 使用多行输出
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
   build-macos:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos' }}
     runs-on: macos-latest
     steps:
-      - name: 拉取私有仓库代码
+      - name: 拉代码
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
@@ -119,63 +89,45 @@ jobs:
           node-version: 22
           cache: "pnpm"
           
-      - name: 安装依赖
+      - name: 装依赖
         run: pnpm install
         
-      - name: 安装 Rust 工具链
+      - name: 装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - name: 构建 Intel 版本 (x64)
+      - name: 编 x64
         run: pnpm run tauri build --target x86_64-apple-darwin
         
-      - name: 重命名 x64 安装包
+      - name: 改 x64 文件名
         run: |
           cd src-tauri/target/x86_64-apple-darwin/release/bundle/dmg
-          for f in *.dmg; do 
-            new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/' | sed 's/\.dmg/_x64.dmg/')
-            mv "$f" "$new_f"
-          done
+          for f in *.dmg; do mv "$f" "${f%.dmg}_x64.dmg"; done
 
-      - name: 构建 Apple Silicon 版本 (ARM64)
+      - name: 编 ARM64
         run: pnpm run tauri build --target aarch64-apple-darwin
         
-      - name: 重命名 ARM64 安装包
+      - name: 改 ARM64 文件名
         run: |
           cd src-tauri/target/aarch64-apple-darwin/release/bundle/dmg
-          for f in *.dmg; do 
-            new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/' | sed 's/\.dmg/_aarch64.dmg/')
-            mv "$f" "$new_f"
-          done
+          for f in *.dmg; do mv "$f" "${f%.dmg}_aarch64.dmg"; done
 
-      - name: 构建通用版本 (Universal)
+      - name: 编 Universal
         run: pnpm run tauri build --target universal-apple-darwin
         
-      - name: 重命名 Universal 安装包
+      - name: 改 Universal 文件名
         run: |
           cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
-          for f in *.dmg; do 
-            new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/' | sed 's/\.dmg/_universal.dmg/')
-            mv "$f" "$new_f"
-          done
+          for f in *.dmg; do mv "$f" "${f%.dmg}_universal.dmg"; done
 
-      - name: 打包 macOS 产物
+      - name: 收 macOS 包
         run: |
           mkdir -p ./release-upload/macos
-          for target in x86_64-apple-darwin aarch64-apple-darwin universal-apple-darwin; do
-            for f in src-tauri/target/${target}/release/bundle/dmg/*.dmg; do
-              [ -f "$f" ] && cp "$f" ./release-upload/macos/
-            done
-            for f in src-tauri/target/${target}/release/bundle/macos/*.app.tar.gz; do
-              if [ -f "$f" ]; then
-                new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/')
-                cp "$f" ./release-upload/macos/"$(basename "$new_f")"
-              fi
-            done
-          done
+          cp src-tauri/target/*/release/bundle/dmg/*.dmg ./release-upload/macos/ 2>/dev/null || true
+          cp src-tauri/target/*/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
 
-      - name: 上传 macOS 构建产物
+      - name: 传 macOS 产物
         uses: actions/upload-artifact@v4
         with:
           name: macos-all
@@ -187,7 +139,7 @@ jobs:
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     runs-on: ubuntu-22.04
     steps:
-      - name: 拉取私有仓库代码
+      - name: 拉代码
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
@@ -202,15 +154,15 @@ jobs:
           node-version: 22
           cache: "pnpm"
           
-      - name: 安装依赖
+      - name: 装依赖
         run: pnpm install
 
-      - name: 安装 Rust 工具链
+      - name: 装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-gnu
 
-      - name: 安装 x64 编译依赖
+      - name: 装系统库
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -218,28 +170,17 @@ jobs:
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
             libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
-      - name: 构建 x64 版本
+      - name: 编 x64
         run: pnpm run tauri build --target x86_64-unknown-linux-gnu
 
-      # 暂时跳过 ARM64，先保证 x64 能正常工作
-      # 后续可以单独修复 ARM64 的 AppImage 打包问题
-
-      - name: 打包 Linux 产物
+      - name: 收 Linux 包
         run: |
           mkdir -p ./release-upload/linux
-          for ext in deb AppImage rpm tar.gz; do
-            dir=${ext//./}
-            [ "$ext" = "tar.gz" ] && dir="tar.gz"
-            for file in src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/${dir}/*.$ext; do
-              if [ -f "$file" ]; then
-                filename=$(basename "$file")
-                new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
-                cp "$file" "./release-upload/linux/$new_filename"
-              fi
-            done
+          for dir in deb appimage rpm tar.gz; do
+            cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/${dir}/* ./release-upload/linux/ 2>/dev/null || true
           done
 
-      - name: 上传 Linux 构建产物
+      - name: 传 Linux 产物
         uses: actions/upload-artifact@v4
         with:
           name: linux-all
@@ -251,7 +192,7 @@ jobs:
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
     runs-on: windows-latest
     steps:
-      - name: 拉取私有仓库代码
+      - name: 拉代码
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
@@ -266,41 +207,35 @@ jobs:
           node-version: 22
           cache: "pnpm"
           
-      - name: 安装依赖
+      - name: 装依赖
         run: pnpm install
 
-      - name: 安装 Rust 工具链
+      - name: 装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc
 
-      - name: 构建 x64 版本
+      - name: 编 x64
         run: pnpm run tauri build --target x86_64-pc-windows-msvc
 
-      - name: 构建 x86 版本
+      - name: 编 x86
         run: pnpm run tauri build --target i686-pc-windows-msvc
 
-      - name: 构建 ARM64 版本
+      - name: 编 ARM64
         run: pnpm run tauri build --target aarch64-pc-windows-msvc
 
-      - name: 打包 Windows 产物
+      - name: 收 Windows 包
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
           foreach ($target in @("x86_64-pc-windows-msvc", "i686-pc-windows-msvc", "aarch64-pc-windows-msvc")) {
-            foreach ($type in @("msi", "nsis")) {
-              $ext = if ($type -eq "msi") { "msi" } else { "exe" }
-              $bundlePath = "src-tauri/target/$target/release/bundle/$type"
-              if (Test-Path $bundlePath) {
-                Get-ChildItem "$bundlePath/*.$ext" -ErrorAction SilentlyContinue | ForEach-Object {
-                  $newName = $_.Name -replace '^FRP', 'LingYunFrpLauncher'
-                  Copy-Item $_.FullName "./release-upload/windows/$newName" -Force
-                }
-              }
+            foreach ($ext in @("msi", "exe")) {
+              $path = "src-tauri/target/$target/release/bundle/*/*.$ext"
+              Copy-Item $path ./release-upload/windows/ -ErrorAction SilentlyContinue
             }
           }
 
-      - name: 上传 Windows 构建产物
+      - name: 传 Windows 产物
         uses: actions/upload-artifact@v4
         with:
           name: windows-all
@@ -316,16 +251,13 @@ jobs:
       (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
-      - name: 下载所有构建产物
+      - name: 下载产物
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
           merge-multiple: true
 
-      - name: 查看产物列表
-        run: find ./artifacts -type f
-
-      - name: 删除已存在的 Release（强制更新时）
+      - name: 删旧 Release（如需）
         if: ${{ inputs.force_recreate == true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -334,12 +266,16 @@ jobs:
           gh release delete "$VERSION" --yes 2>/dev/null || true
           git push origin :refs/tags/$VERSION 2>/dev/null || true
 
-      - name: 创建 Release
+      - name: 发 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.version }}
           name: ${{ needs.prepare.outputs.title }}
-          body: ${{ needs.prepare.outputs.notes }}
+          body: |
+            > 构建完成，请编辑此 Release 添加更新说明。
+            
+            - 版本：${{ needs.prepare.outputs.version }}
+            - 构建编号：${{ github.run_id }}
           files: ./artifacts/**/*
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'beta') || contains(needs.prepare.outputs.version, 'alpha') || contains(needs.prepare.outputs.version, 'rc') }}
