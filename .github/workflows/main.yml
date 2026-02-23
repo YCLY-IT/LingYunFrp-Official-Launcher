@@ -71,11 +71,14 @@ jobs:
         id: set-title
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
-            TITLE="${{ steps.set-version.outputs.version }}"
+            # 自动触发（推送标签）：生成 🎉 Release + 版本号 格式
+            TITLE="🎉 Release ${{ steps.set-version.outputs.version }}"
           elif [ -n "${{ inputs.release_title }}" ]; then
+            # 手动触发且输入了标题：使用自定义标题
             TITLE="${{ inputs.release_title }}"
           else
-            TITLE="${{ inputs.version }}"
+            # 手动触发且未输入标题：默认生成 🎉 Release + 版本号
+            TITLE="🎉 Release ${{ inputs.version }}"
           fi
           echo "title=$TITLE" >> $GITHUB_OUTPUT
       
