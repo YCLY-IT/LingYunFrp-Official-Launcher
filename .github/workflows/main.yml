@@ -1,0 +1,417 @@
+name: Build from Private Repo (Free)
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.client_payload.ref || github.ref }}
+  cancel-in-progress: true
+
+on:
+  repository_dispatch:
+    types: [build-release]
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "Source repository"
+        required: true
+        default: "YCLY-IT/LingYunFrp-Client-Launcher"
+      source_ref:
+        description: "Git ref (tag/branch)"
+        required: true
+        default: "main"
+      platform:
+        description: "Platform to build"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - macos
+          - linux
+          - windows
+      create_release:
+        description: "Create GitHub Release"
+        default: true
+        type: boolean
+
+jobs:
+  # ==================== 参数解析 ====================
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      source_repo: ${{ steps.vars.outputs.source_repo }}
+      source_ref: ${{ steps.vars.outputs.source_ref }}
+      platform: ${{ steps.vars.outputs.platform }}
+      create_release: ${{ steps.vars.outputs.create_release }}
+      is_tag: ${{ steps.vars.outputs.is_tag }}
+      version: ${{ steps.vars.outputs.version }}
+    steps:
+      - id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "source_repo=${{ github.event.client_payload.source_repo }}" >> $GITHUB_OUTPUT
+            echo "source_ref=${{ github.event.client_payload.ref }}" >> $GITHUB_OUTPUT
+            echo "platform=${{ github.event.client_payload.platform || 'all' }}" >> $GITHUB_OUTPUT
+            echo "create_release=${{ github.event.client_payload.create_release }}" >> $GITHUB_OUTPUT
+            REF="${{ github.event.client_payload.ref }}"
+          else
+            echo "source_repo=${{ github.event.inputs.source_repo }}" >> $GITHUB_OUTPUT
+            echo "source_ref=${{ github.event.inputs.source_ref }}" >> $GITHUB_OUTPUT
+            echo "platform=${{ github.event.inputs.platform }}" >> $GITHUB_OUTPUT
+            echo "create_release=${{ github.event.inputs.create_release }}" >> $GITHUB_OUTPUT
+            REF="${{ github.event.inputs.source_ref }}"
+          fi
+          
+          # 检查是否是 tag
+          if [[ "$REF" == refs/tags/v* ]]; then
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+            echo "version=${REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+            echo "version=0.0.0" >> $GITHUB_OUTPUT
+          fi
+
+  # ==================== macOS (x64 + ARM64 + Universal) ====================
+  build-macos:
+    needs: setup
+    if: ${{ needs.setup.outputs.platform == 'all' || needs.setup.outputs.platform == 'macos' }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.source_repo }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ needs.setup.outputs.source_ref }}
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Build x64
+      - name: Build Tauri (x64)
+        run: pnpm run tauri build --target x86_64-apple-darwin
+
+      - name: Rename x64 dmg
+        run: |
+          cd src-tauri/target/x86_64-apple-darwin/release/bundle/dmg
+          for f in *.dmg; do mv "$f" "${f%.dmg}_x64.dmg"; done
+
+      # Build ARM64
+      - name: Build Tauri (ARM64)
+        run: pnpm run tauri build --target aarch64-apple-darwin
+
+      - name: Rename aarch64 dmg
+        run: |
+          cd src-tauri/target/aarch64-apple-darwin/release/bundle/dmg
+          for f in *.dmg; do mv "$f" "${f%.dmg}_aarch64.dmg"; done
+
+      # Build Universal
+      - name: Build Tauri (Universal)
+        run: pnpm run tauri build --target universal-apple-darwin
+
+      - name: Rename universal dmg
+        run: |
+          cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
+          for f in *.dmg; do mv "$f" "${f%.dmg}_universal.dmg"; done
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-all
+          path: |
+            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*_x64.dmg
+            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*_aarch64.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*_universal.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
+          retention-days: 1
+
+  # ==================== Linux (x64 + ARM64) ====================
+  build-linux:
+    needs: setup
+    if: ${{ needs.setup.outputs.platform == 'all' || needs.setup.outputs.platform == 'linux' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.source_repo }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ needs.setup.outputs.source_ref }}
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Build x64
+      - name: Install system dependencies (x64)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libglib2.0-dev libsoup-3.0-dev pkg-config \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Build Tauri (x64)
+        run: pnpm run tauri build --target x86_64-unknown-linux-gnu
+
+      - name: Upload x64 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: |
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/tar.gz/*.tar.gz
+          retention-days: 1
+
+      # Build ARM64
+      - name: Setup ARM64 cross compilation
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
+          sudo tee /etc/apt/sources.list > /dev/null <<'EOF'
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            pkg-config-aarch64-linux-gnu libc6-dev-arm64-cross \
+            patchelf perl wget
+
+      - name: Build OpenSSL for ARM64
+        run: |
+          OPENSSL_VERSION="3.2.1"
+          wget -q https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+          tar xzf openssl-${OPENSSL_VERSION}.tar.gz
+          cd openssl-${OPENSSL_VERSION}
+          export CC=aarch64-linux-gnu-gcc
+          export CXX=aarch64-linux-gnu-g++
+          ./Configure linux-aarch64 shared --prefix=/opt/openssl-arm64
+          make -j$(nproc)
+          sudo make install
+          echo "OPENSSL_DIR=/opt/openssl-arm64" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=/opt/openssl-arm64/include" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=/opt/openssl-arm64/lib" >> $GITHUB_ENV
+          sudo mkdir -p /opt/openssl-arm64/lib/pkgconfig
+          sudo tee /opt/openssl-arm64/lib/pkgconfig/openssl.pc > /dev/null <<EOF
+          prefix=/opt/openssl-arm64
+          exec_prefix=\${prefix}
+          libdir=\${exec_prefix}/lib
+          includedir=\${prefix}/include
+          Name: OpenSSL
+          Version: 3.2.1
+          Libs: -L\${libdir} -lssl -lcrypto
+          Cflags: -I\${includedir}
+          EOF
+
+      - name: Install Tauri dependencies (ARM64)
+        run: |
+          sudo apt-get install -y \
+            libgtk-3-dev:arm64 libglib2.0-dev:arm64 libsoup-3.0-dev:arm64 \
+            libwebkit2gtk-4.1-dev:arm64 libjavascriptcoregtk-4.1-dev:arm64 \
+            libayatana-appindicator3-dev:arm64 librsvg2-dev:arm64 libssl-dev:arm64 || true
+
+      - name: Configure Cargo for ARM64
+        run: |
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          [env]
+          PKG_CONFIG_ALLOW_CROSS = "1"
+          PKG_CONFIG_SYSROOT_DIR = "/usr/aarch64-linux-gnu"
+          OPENSSL_STATIC = "1"
+          OPENSSL_DIR = "/opt/openssl-arm64"
+          OPENSSL_INCLUDE_DIR = "/opt/openssl-arm64/include"
+          OPENSSL_LIB_DIR = "/opt/openssl-arm64/lib"
+          PKG_CONFIG_PATH = "/opt/openssl-arm64/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
+          EOF
+
+      - name: Build Tauri (ARM64)
+        run: pnpm run tauri build --target aarch64-unknown-linux-gnu
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_SYSROOT_DIR: "/usr/aarch64-linux-gnu"
+          OPENSSL_STATIC: "1"
+          OPENSSL_DIR: "/opt/openssl-arm64"
+          OPENSSL_INCLUDE_DIR: "/opt/openssl-arm64/include"
+          OPENSSL_LIB_DIR: "/opt/openssl-arm64/lib"
+          PKG_CONFIG_PATH: "/opt/openssl-arm64/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
+          CC: aarch64-linux-gnu-gcc
+          CXX: aarch64-linux-gnu-g++
+
+      - name: Upload ARM64 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: |
+            src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/*.deb
+            src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/rpm/*.rpm
+            src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/tar.gz/*.tar.gz
+          retention-days: 1
+
+  # ==================== Windows (x64 + x86 + ARM64) ====================
+  build-windows:
+    needs: setup
+    if: ${{ needs.setup.outputs.platform == 'all' || needs.setup.outputs.platform == 'windows' }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.setup.outputs.source_repo }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ needs.setup.outputs.source_ref }}
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Build x64
+      - name: Build Tauri (x64)
+        run: pnpm run tauri build --target x86_64-pc-windows-msvc
+
+      - name: Upload x64 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/zip/*.zip
+          retention-days: 1
+
+      # Build x86
+      - name: Build Tauri (x86)
+        run: pnpm run tauri build --target i686-pc-windows-msvc
+
+      - name: Upload x86 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86
+          path: |
+            src-tauri/target/i686-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/i686-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/i686-pc-windows-msvc/release/bundle/zip/*.zip
+          retention-days: 1
+
+      # Build ARM64
+      - name: Build Tauri (ARM64)
+        run: pnpm run tauri build --target aarch64-pc-windows-msvc
+
+      - name: Upload ARM64 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64
+          path: |
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/zip/*.zip
+          retention-days: 1
+
+  # ==================== 收集并发布 Release ====================
+  release:
+    needs: [setup, build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: ${{ always() && (needs.setup.outputs.is_tag == 'true' || needs.setup.outputs.create_release == 'true') && !contains(needs.*.result, 'failure') }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create Release in Private Repo
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ needs.setup.outputs.source_repo }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          tag_name: ${{ needs.setup.outputs.source_ref }}
+          name: "LingYunFrp Client v${{ needs.setup.outputs.version }}"
+          body: "Automated build from ${{ needs.setup.outputs.source_repo }}@${{ needs.setup.outputs.source_ref }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.deb
+            artifacts/**/*.AppImage
+            artifacts/**/*.rpm
+            artifacts/**/*.tar.gz
+            artifacts/**/*.msi
+            artifacts/**/*.exe
+            artifacts/**/*.zip
