@@ -31,16 +31,22 @@ on:
           - windows
       
       release_title:
-        description: "Release 标题（可选，默认使用版本号）"
+        description: "Release 标题（可选，默认：🎉 Release v版本号）"
         required: false
         default: ""
         type: string
       
+      # ========== 核心修改：release_notes 改为多行文本框 ==========
       release_notes:
-        description: "更新说明（可选）"
+        description: "更新说明（支持多行 Markdown，可直接写源码）"
         required: false
-        default: ""
-        type: string
+        default: |
+          ## 🚀 新版本发布
+          - 修复已知 Bug
+          - 优化性能
+          - 新增功能：XXX
+        type: text  # text 类型在 GitHub 中会渲染为多行 textarea
+        # 关键：GitHub 的 type: text 会自动变成多行输入框，支持换行、源码预览
       
       force_recreate:
         description: "如果 Release 已存在，是否强制更新"
@@ -71,26 +77,25 @@ jobs:
         id: set-title
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
-            # 自动触发（推送标签）：生成 🎉 Release + 版本号 格式
             TITLE="🎉 Release ${{ steps.set-version.outputs.version }}"
           elif [ -n "${{ inputs.release_title }}" ]; then
-            # 手动触发且输入了标题：使用自定义标题
             TITLE="${{ inputs.release_title }}"
           else
-            # 手动触发且未输入标题：默认生成 🎉 Release + 版本号
             TITLE="🎉 Release ${{ inputs.version }}"
           fi
           echo "title=$TITLE" >> $GITHUB_OUTPUT
       
-      - name: 确定更新说明
+      # ========== 优化：多行 Markdown 转义处理 ==========
+      - name: 确定更新说明（支持多行Markdown）
         id: set-notes
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
-            NOTES="自动构建发布"
+            NOTES="🎉 自动构建发布"
           elif [ -n "${{ inputs.release_notes }}" ]; then
             NOTES="${{ inputs.release_notes }}"
           else
-            NOTES="手动构建发布"
+            NOTES="🚀 手动构建发布"
           fi
           echo "notes=$NOTES" >> $GITHUB_OUTPUT
 
@@ -439,15 +444,22 @@ jobs:
           gh release delete "$VERSION" --yes 2>/dev/null || echo "Release $VERSION 不存在，无需删除"
           git push origin :refs/tags/$VERSION 2>/dev/null || echo "标签 $VERSION 不存在，无需删除"
 
+      # ========== 优化：Release 正文支持完整 Markdown 渲染 ==========
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.version }}
           name: ${{ needs.prepare.outputs.title }}
           body: |
+            ## 📝 更新日志
             ${{ needs.prepare.outputs.notes }}
-            
-            工作流编号: ${{ github.run_id }}
+
+            ---
+            ## 📌 构建信息
+            - 版本号：`${{ needs.prepare.outputs.version }}`
+            - 工作流编号：`${{ github.run_id }}`
+            - 构建时间：`$(date +'%Y-%m-%d %H:%M:%S')`
+            - 触发方式：${{ github.event_name == 'push' && '标签推送' || '手动触发' }}
           files: ./artifacts/**/*
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'beta') || contains(needs.prepare.outputs.version, 'alpha') || contains(needs.prepare.outputs.version, 'rc') }}
