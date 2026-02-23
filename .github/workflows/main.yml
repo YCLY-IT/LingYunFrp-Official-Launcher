@@ -37,7 +37,7 @@ on:
         type: string
       
       release_notes:
-        description: "更新说明（推送标签时自动提取，手动触发时填写）"
+        description: "更新说明（推送标签时自动套用模板，手动触发时填写）"
         required: false
         default: ""
         type: string
@@ -85,7 +85,6 @@ jobs:
       - name: 生成缓存 key
         id: cache-key
         run: |
-          # 基于 Cargo.lock 和 package.json 生成缓存 key
           KEY="${{ hashFiles('**/Cargo.lock', '**/pnpm-lock.yaml') }}"
           echo "key=$KEY" >> $GITHUB_OUTPUT
       
@@ -94,24 +93,154 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VERSION="${{ steps.set-version.outputs.version }}"
+          BUILD_DATE=$(date '+%Y-%m-%d')
+          
           if [ "${{ github.event_name }}" == "push" ]; then
+            # 提取这段时间的 commit 作为"本次更新"列表
             LAST_RUN=$(gh run list --workflow="Build Private Project and Release" --status=success --limit=1 --json createdAt -q '.[0].createdAt' 2>/dev/null || echo "")
+            CHANGES=""
             if [ -n "$LAST_RUN" ]; then
               SINCE=$(date -d "$LAST_RUN" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "")
-              [ -n "$SINCE" ] && CHANGES=$(git log --since="$SINCE" --pretty=format:"- %s" --no-merges | head -50)
+              [ -n "$SINCE" ] && CHANGES=$(git log --since="$SINCE" --pretty=format:"- %s" --no-merges | head -20)
             fi
             [ -z "$CHANGES" ] && CHANGES=$(git log -10 --pretty=format:"- %s" --no-merges)
-            [ -n "$CHANGES" ] && NOTES="## 更新内容\n\n$CHANGES" || NOTES="## 更新内容\n\n无记录"
+            
+            # 套你的完整模板
+            NOTES="## 🚀 首个正式版本发布
+
+凌云FRP图形化客户端 ${VERSION} 正式发布！这是一个基于 Tauri + Vue3 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。
+
+### ✨ 主要功能
+
+- **图形化配置管理** - 直观易用的界面，轻松管理 FRP 配置
+- **一键启停服务** - 快速启动和停止 FRP 服务
+- **实时日志查看** - 内置日志面板，实时显示运行状态
+- **系统托盘支持** - 最小化到托盘，快捷操作不打扰
+- **自动更新检测** - 自动检查新版本，及时获取更新
+- **多主题切换** - 支持明暗主题，适配不同使用场景
+- **跨平台支持** - 支持 Windows、macOS、Linux 三大平台
+
+### 📦 下载安装
+
+| 平台 | 架构 | 安装包 |
+|------|------|--------|
+| Windows | x64 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
+| Windows | x86 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
+| Windows | ARM64 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
+| macOS | x64 | \`.dmg\` / \`.app.tar.gz\` |
+| macOS | ARM64 (M1/M2) | \`.dmg\` / \`.app.tar.gz\` |
+| macOS | Universal | \`.dmg\` / \`.app.tar.gz\` |
+| Linux | x64 | \`.deb\` / \`.AppImage\` / \`.rpm\` / \`.tar.gz\` |
+| Linux | ARM64 | \`.deb\` / \`.AppImage\` / \`.rpm\` / \`.tar.gz\` |
+
+### 🔧 系统要求
+
+- **Windows**: Windows 10 及以上（64位）
+- **macOS**: macOS 11 (Big Sur) 及以上（Intel/Apple Silicon）
+- **Linux**: Ubuntu 20.04+ / Debian 11+ / Fedora 35+ / Arch Linux
+
+### 📝 安装指南
+
+#### Windows
+1. 下载 \`.msi\` 安装包（推荐）或 \`.exe\` 安装程序
+2. 双击运行安装程序，按向导完成安装
+3. 从开始菜单或桌面快捷方式启动应用
+
+#### macOS
+1. 下载 \`.dmg\` 文件
+2. 双击打开，将应用拖拽到 Applications 文件夹
+3. 首次启动请参考下方\"注意事项\"
+
+#### Linux
+**Debian/Ubuntu (.deb):**
+\`\`\`bash
+sudo dpkg -i 凌云FRP_${VERSION}_amd64.deb
+sudo apt-get install -f  # 修复依赖
+\`\`\`
+
+**Fedora/openSUSE (.rpm):**
+\`\`\`bash
+sudo rpm -i 凌云FRP-${VERSION}-1.x86_64.rpm
+\`\`\`
+
+**AppImage:**
+\`\`\`bash
+chmod +x 凌云FRP_${VERSION}_amd64.AppImage
+./凌云FRP_${VERSION}_amd64.AppImage
+\`\`\`
+
+**Arch Linux (tar.gz):**
+\`\`\`bash
+tar -xzf 凌云FRP_${VERSION}_amd64.tar.gz
+cd 凌云FRP
+./凌云FRP
+\`\`\`
+
+### ⚠️ 注意事项
+
+#### Windows
+- **SmartScreen 提示**：首次安装时，Windows Defender SmartScreen 可能会提示\"Windows 已保护你的电脑\"，点击\"更多信息\" → \"仍要运行\"即可。这是因为应用尚未建立信誉度，并非安全问题。
+- **安装权限**：安装 \`.msi\` 版本时，若提示\"来自未知发布者\"，请点击\"更多信息\" → \"仍要运行\"。
+- **杀毒软件**：部分杀毒软件可能会误报，请将应用添加到白名单。
+
+#### macOS
+- **Gatekeeper 提示**：首次打开应用时，系统会提示\"无法打开'凌云FRP'，因为无法验证开发者\"，请前往 **系统设置 → 隐私与安全性** → 安全性 → 点击\"仍要打开\"。
+- **Apple Silicon**：ARM64 版本原生支持 Apple Silicon (M1/M2/M3)，Universal 版本同时支持 Intel 和 Apple Silicon。
+- **辅助功能**：应用可能需要请求\"辅助功能\"权限以实现全局快捷键，可在 **系统设置 → 隐私与安全性 → 辅助功能** 中授权。
+
+#### Linux
+- **依赖库**：使用 \`.deb\` 或 \`.rpm\` 安装包可自动处理依赖关系。若手动安装，请确保已安装以下依赖：
+  - \`libwebkit2gtk-4.1-0\` 或 \`webkit2gtk4.1\`
+  - \`libgtk-3-0\`
+  - \`libappindicator3-1\`（系统托盘支持）
+- **AppImage 权限**：AppImage 版本需要赋予执行权限：\`chmod +x 凌云FRP_*.AppImage\`
+- **Wayland 兼容性**：在 Wayland 会话下，部分功能可能需要额外配置，建议使用 X11 或等待后续更新。
+
+#### 通用
+- **文件存储**：文件默认存储在系统标准配置目录：
+  - Windows: \`%APPDATA%\\cn.lyfrp.client\`
+  - macOS: \`~/Library/Application Support/cn.lyfrp.client\`
+  - Linux: \`~/.config/cn.lyfrp.client\`
+
+### 🐛 已知问题
+
+- Windows 11 部分版本可能存在窗口阴影渲染问题
+- Linux Wayland 下系统托盘图标可能无法正常显示
+- 首次启动时加载可能需要几秒钟，请耐心等待
+
+### 🔄 更新日志
+
+**${VERSION} (${BUILD_DATE})**
+${CHANGES}
+
+### 📋 反馈与支持
+
+- 🌐 官网：https://www.lyfrp.cn 
+- 📖 文档：https://docs.lyfrp.cn 
+- 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues 
+- 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/wiki 
+- 📧 邮箱：1263115878@qq.com
+- 💬 QQ群：882670857
+
+### 📜 开源协议
+
+本项目基于 [AGPL-3.0 License](LICENSE) 开源。
+
+---
+
+**感谢使用凌云FRP！如有任何问题或建议，欢迎反馈。**"
+            
           elif [ -n "${{ inputs.release_notes }}" ]; then
             NOTES="${{ inputs.release_notes }}"
           else
-            NOTES="手动构建"
+            NOTES="手动构建 ${VERSION}"
           fi
+          
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           echo -e "$NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-  # macOS 优化：只构建 Universal，一次打包双架构
   build-macos:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos' }}
@@ -123,13 +252,11 @@ jobs:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
       
-      # 缓存 Rust 依赖
       - name: 缓存 Rust
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ needs.prepare.outputs.cache-key }}-macos
       
-      # 缓存 pnpm
       - uses: pnpm/action-setup@v2
         with:
           version: 10
@@ -139,8 +266,7 @@ jobs:
           node-version: 22
           cache: "pnpm"
       
-      # 缓存 Tauri 构建产物
-      - name: 缓存 Tauri 构建
+      - name: 缓存 Tauri
         uses: actions/cache@v4
         with:
           path: |
@@ -148,8 +274,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: tauri-macos-${{ needs.prepare.outputs.cache-key }}
-          restore-keys: |
-            tauri-macos-
+          restore-keys: tauri-macos-
       
       - name: 装依赖
         run: pnpm install
@@ -159,8 +284,7 @@ jobs:
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      # 只构建 Universal，内部自动编译 x64 和 ARM64
-      - name: 编 Universal（含双架构）
+      - name: 编 Universal
         run: pnpm run tauri build --target universal-apple-darwin
         
       - name: 改文件名
@@ -181,7 +305,6 @@ jobs:
           path: ./release-upload/macos/*
           retention-days: 1
 
-  # Linux 优化：并行构建 x64 和 ARM64 分成两个 job
   build-linux-x64:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
@@ -215,8 +338,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: tauri-linux-x64-${{ needs.prepare.outputs.cache-key }}
-          restore-keys: |
-            tauri-linux-x64-
+          restore-keys: tauri-linux-x64-
       
       - name: 装依赖
         run: pnpm install
@@ -251,7 +373,6 @@ jobs:
           path: ./release-upload/linux-x64/*
           retention-days: 1
 
-  # ARM64 单独一个 job，可以并行跑
   build-linux-arm64:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
@@ -285,8 +406,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: tauri-linux-arm64-${{ needs.prepare.outputs.cache-key }}
-          restore-keys: |
-            tauri-linux-arm64-
+          restore-keys: tauri-linux-arm64-
       
       - name: 装依赖
         run: pnpm install
@@ -296,7 +416,6 @@ jobs:
         with:
           targets: aarch64-unknown-linux-gnu
 
-      # 简化 ARM64 依赖安装，用脚本一键配置
       - name: 配置 ARM64 环境
         run: |
           sudo dpkg --add-architecture arm64
@@ -319,9 +438,8 @@ jobs:
           linker = "aarch64-linux-gnu-gcc"
           EOF
 
-      - name: 编 ARM64（跳过 AppImage，只打 deb）
+      - name: 编 ARM64
         run: |
-          # 临时改配置，跳过 AppImage（那个库路径问题）
           sed -i 's/"targets": "all"/"targets": "deb"/' src-tauri/tauri.conf.json 2>/dev/null || true
           pnpm run tauri build --target aarch64-unknown-linux-gnu
         env:
@@ -339,7 +457,30 @@ jobs:
           path: ./release-upload/linux-arm64/*
           retention-days: 1
 
-  # Windows 优化：并行构建三个架构
+  merge-linux:
+    needs: [build-linux-x64, build-linux-arm64]
+    if: ${{ always() && (needs.build-linux-x64.result == 'success' || needs.build-linux-arm64.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载 x64
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: ./release-upload/linux
+      
+      - name: 下载 ARM64
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: ./release-upload/linux
+
+      - name: 传合并产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-all
+          path: ./release-upload/linux/*
+          retention-days: 1
+
   build-windows:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
@@ -373,8 +514,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: tauri-windows-${{ needs.prepare.outputs.cache-key }}
-          restore-keys: |
-            tauri-windows-
+          restore-keys: tauri-windows-
       
       - name: 装依赖
         run: pnpm install
@@ -384,7 +524,6 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc
 
-      # Windows 用并行构建，三个架构同时编译
       - name: 并行编三个架构
         shell: pwsh
         run: |
@@ -408,31 +547,6 @@ jobs:
         with:
           name: windows-all
           path: ./release-upload/windows/*
-          retention-days: 1
-
-  # 合并 Linux 产物
-  merge-linux:
-    needs: [build-linux-x64, build-linux-arm64]
-    if: ${{ always() && (needs.build-linux-x64.result == 'success' || needs.build-linux-arm64.result == 'success') }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: 下载 x64
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x64
-          path: ./release-upload/linux
-      
-      - name: 下载 ARM64
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-arm64
-          path: ./release-upload/linux
-
-      - name: 传合并产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-all
-          path: ./release-upload/linux/*
           retention-days: 1
 
   release:
@@ -464,12 +578,7 @@ jobs:
         with:
           tag_name: ${{ needs.prepare.outputs.version }}
           name: ${{ needs.prepare.outputs.title }}
-          body: |
-            ${{ needs.prepare.outputs.notes }}
-            
-            ---
-            - 版本：${{ needs.prepare.outputs.version }}
-            - 构建编号：${{ github.run_id }}
+          body: ${{ needs.prepare.outputs.notes }}
           files: ./artifacts/**/*
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'beta') || contains(needs.prepare.outputs.version, 'alpha') || contains(needs.prepare.outputs.version, 'rc') }}
