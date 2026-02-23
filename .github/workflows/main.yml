@@ -36,6 +36,12 @@ on:
         default: ""
         type: string
       
+      release_notes:
+        description: "更新说明（推送标签时自动提取，手动触发时填写）"
+        required: false
+        default: ""
+        type: string
+      
       force_recreate:
         description: "如果 Release 已存在，是否强制更新"
         required: false
@@ -48,7 +54,14 @@ jobs:
     outputs:
       version: ${{ steps.set-version.outputs.version }}
       title: ${{ steps.set-title.outputs.title }}
+      notes: ${{ steps.set-notes.outputs.notes }}
+      cache-key: ${{ steps.cache-key.outputs.key }}
     steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
       - name: 准备版本信息
         id: set-version
         run: |
@@ -68,7 +81,37 @@ jobs:
             TITLE="${{ steps.set-version.outputs.version }}"
           fi
           echo "title=$TITLE" >> $GITHUB_OUTPUT
+      
+      - name: 生成缓存 key
+        id: cache-key
+        run: |
+          # 基于 Cargo.lock 和 package.json 生成缓存 key
+          KEY="${{ hashFiles('**/Cargo.lock', '**/pnpm-lock.yaml') }}"
+          echo "key=$KEY" >> $GITHUB_OUTPUT
+      
+      - name: 准备更新说明
+        id: set-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            LAST_RUN=$(gh run list --workflow="Build Private Project and Release" --status=success --limit=1 --json createdAt -q '.[0].createdAt' 2>/dev/null || echo "")
+            if [ -n "$LAST_RUN" ]; then
+              SINCE=$(date -d "$LAST_RUN" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "")
+              [ -n "$SINCE" ] && CHANGES=$(git log --since="$SINCE" --pretty=format:"- %s" --no-merges | head -50)
+            fi
+            [ -z "$CHANGES" ] && CHANGES=$(git log -10 --pretty=format:"- %s" --no-merges)
+            [ -n "$CHANGES" ] && NOTES="## 更新内容\n\n$CHANGES" || NOTES="## 更新内容\n\n无记录"
+          elif [ -n "${{ inputs.release_notes }}" ]; then
+            NOTES="${{ inputs.release_notes }}"
+          else
+            NOTES="手动构建"
+          fi
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
+  # macOS 优化：只构建 Universal，一次打包双架构
   build-macos:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos' }}
@@ -80,6 +123,13 @@ jobs:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
       
+      # 缓存 Rust 依赖
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.prepare.outputs.cache-key }}-macos
+      
+      # 缓存 pnpm
       - uses: pnpm/action-setup@v2
         with:
           version: 10
@@ -88,7 +138,19 @@ jobs:
         with:
           node-version: 22
           cache: "pnpm"
-          
+      
+      # 缓存 Tauri 构建产物
+      - name: 缓存 Tauri 构建
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-macos-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: |
+            tauri-macos-
+      
       - name: 装依赖
         run: pnpm install
         
@@ -97,44 +159,30 @@ jobs:
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - name: 编 x64
-        run: pnpm run tauri build --target x86_64-apple-darwin
-        
-      - name: 改 x64 文件名
-        run: |
-          cd src-tauri/target/x86_64-apple-darwin/release/bundle/dmg
-          for f in *.dmg; do mv "$f" "${f%.dmg}_x64.dmg"; done
-
-      - name: 编 ARM64
-        run: pnpm run tauri build --target aarch64-apple-darwin
-        
-      - name: 改 ARM64 文件名
-        run: |
-          cd src-tauri/target/aarch64-apple-darwin/release/bundle/dmg
-          for f in *.dmg; do mv "$f" "${f%.dmg}_aarch64.dmg"; done
-
-      - name: 编 Universal
+      # 只构建 Universal，内部自动编译 x64 和 ARM64
+      - name: 编 Universal（含双架构）
         run: pnpm run tauri build --target universal-apple-darwin
         
-      - name: 改 Universal 文件名
+      - name: 改文件名
         run: |
           cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
           for f in *.dmg; do mv "$f" "${f%.dmg}_universal.dmg"; done
 
-      - name: 收 macOS 包
+      - name: 收包
         run: |
           mkdir -p ./release-upload/macos
-          cp src-tauri/target/*/release/bundle/dmg/*.dmg ./release-upload/macos/ 2>/dev/null || true
-          cp src-tauri/target/*/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg ./release-upload/macos/
+          cp src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
 
-      - name: 传 macOS 产物
+      - name: 传产物
         uses: actions/upload-artifact@v4
         with:
           name: macos-all
           path: ./release-upload/macos/*
           retention-days: 1
 
-  build-linux:
+  # Linux 优化：并行构建 x64 和 ARM64 分成两个 job
+  build-linux-x64:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     runs-on: ubuntu-22.04
@@ -145,6 +193,11 @@ jobs:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
       
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.prepare.outputs.cache-key }}-linux-x64
+      
       - uses: pnpm/action-setup@v2
         with:
           version: 10
@@ -153,7 +206,18 @@ jobs:
         with:
           node-version: 22
           cache: "pnpm"
-          
+      
+      - name: 缓存 Tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-linux-x64-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: |
+            tauri-linux-x64-
+      
       - name: 装依赖
         run: pnpm install
 
@@ -173,20 +237,109 @@ jobs:
       - name: 编 x64
         run: pnpm run tauri build --target x86_64-unknown-linux-gnu
 
-      - name: 收 Linux 包
+      - name: 收包
         run: |
-          mkdir -p ./release-upload/linux
+          mkdir -p ./release-upload/linux-x64
           for dir in deb appimage rpm tar.gz; do
-            cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/${dir}/* ./release-upload/linux/ 2>/dev/null || true
+            cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/${dir}/* ./release-upload/linux-x64/ 2>/dev/null || true
           done
 
-      - name: 传 Linux 产物
+      - name: 传产物
         uses: actions/upload-artifact@v4
         with:
-          name: linux-all
-          path: ./release-upload/linux/*
+          name: linux-x64
+          path: ./release-upload/linux-x64/*
           retention-days: 1
 
+  # ARM64 单独一个 job，可以并行跑
+  build-linux-arm64:
+    needs: prepare
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+        with:
+          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+      
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.prepare.outputs.cache-key }}-linux-arm64
+      
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+          
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+      
+      - name: 缓存 Tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-linux-arm64-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: |
+            tauri-linux-arm64-
+      
+      - name: 装依赖
+        run: pnpm install
+
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      # 简化 ARM64 依赖安装，用脚本一键配置
+      - name: 配置 ARM64 环境
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          sudo tee -a /etc/apt/sources.list <<EOF
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross patchelf
+          sudo apt-get install -y libgtk-3-dev:arm64 libwebkit2gtk-4.1-dev:arm64 \
+            libayatana-appindicator3-dev:arm64 2>/dev/null || true
+
+      - name: 配置 Cargo
+        run: |
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/config.toml <<EOF
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: 编 ARM64（跳过 AppImage，只打 deb）
+        run: |
+          # 临时改配置，跳过 AppImage（那个库路径问题）
+          sed -i 's/"targets": "all"/"targets": "deb"/' src-tauri/tauri.conf.json 2>/dev/null || true
+          pnpm run tauri build --target aarch64-unknown-linux-gnu
+        env:
+          CC: aarch64-linux-gnu-gcc
+
+      - name: 收包
+        run: |
+          mkdir -p ./release-upload/linux-arm64
+          cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/* ./release-upload/linux-arm64/ 2>/dev/null || true
+
+      - name: 传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: ./release-upload/linux-arm64/*
+          retention-days: 1
+
+  # Windows 优化：并行构建三个架构
   build-windows:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
@@ -198,6 +351,11 @@ jobs:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
       
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.prepare.outputs.cache-key }}-windows
+      
       - uses: pnpm/action-setup@v2
         with:
           version: 10
@@ -206,7 +364,18 @@ jobs:
         with:
           node-version: 22
           cache: "pnpm"
-          
+      
+      - name: 缓存 Tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-windows-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: |
+            tauri-windows-
+      
       - name: 装依赖
         run: pnpm install
 
@@ -215,39 +384,63 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc
 
-      - name: 编 x64
-        run: pnpm run tauri build --target x86_64-pc-windows-msvc
+      # Windows 用并行构建，三个架构同时编译
+      - name: 并行编三个架构
+        shell: pwsh
+        run: |
+          $jobs = @()
+          $jobs += Start-Job { pnpm run tauri build --target x86_64-pc-windows-msvc }
+          $jobs += Start-Job { pnpm run tauri build --target i686-pc-windows-msvc }
+          $jobs += Start-Job { pnpm run tauri build --target aarch64-pc-windows-msvc }
+          $jobs | Wait-Job | Receive-Job
 
-      - name: 编 x86
-        run: pnpm run tauri build --target i686-pc-windows-msvc
-
-      - name: 编 ARM64
-        run: pnpm run tauri build --target aarch64-pc-windows-msvc
-
-      - name: 收 Windows 包
+      - name: 收包
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
-          foreach ($target in @("x86_64-pc-windows-msvc", "i686-pc-windows-msvc", "aarch64-pc-windows-msvc")) {
-            foreach ($ext in @("msi", "exe")) {
-              $path = "src-tauri/target/$target/release/bundle/*/*.$ext"
-              Copy-Item $path ./release-upload/windows/ -ErrorAction SilentlyContinue
-            }
+          foreach ($target in @("x86_64", "i686", "aarch64")) {
+            Get-ChildItem "src-tauri/target/${target}-pc-windows-msvc/release/bundle/*/*" -Include *.msi,*.exe,*.zip | 
+              Copy-Item -Destination ./release-upload/windows/ -ErrorAction SilentlyContinue
           }
 
-      - name: 传 Windows 产物
+      - name: 传产物
         uses: actions/upload-artifact@v4
         with:
           name: windows-all
           path: ./release-upload/windows/*
           retention-days: 1
 
+  # 合并 Linux 产物
+  merge-linux:
+    needs: [build-linux-x64, build-linux-arm64]
+    if: ${{ always() && (needs.build-linux-x64.result == 'success' || needs.build-linux-arm64.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载 x64
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: ./release-upload/linux
+      
+      - name: 下载 ARM64
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: ./release-upload/linux
+
+      - name: 传合并产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-all
+          path: ./release-upload/linux/*
+          retention-days: 1
+
   release:
-    needs: [prepare, build-macos, build-linux, build-windows]
+    needs: [prepare, build-macos, merge-linux, build-windows]
     if: |
       always() && 
       (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped') &&
-      (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') &&
+      (needs.merge-linux.result == 'success' || needs.merge-linux.result == 'skipped') &&
       (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
@@ -257,7 +450,7 @@ jobs:
           path: ./artifacts
           merge-multiple: true
 
-      - name: 删旧 Release（如需）
+      - name: 删旧 Release
         if: ${{ inputs.force_recreate == true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -272,8 +465,9 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.version }}
           name: ${{ needs.prepare.outputs.title }}
           body: |
-            > 构建完成，请编辑此 Release 添加更新说明。
+            ${{ needs.prepare.outputs.notes }}
             
+            ---
             - 版本：${{ needs.prepare.outputs.version }}
             - 构建编号：${{ github.run_id }}
           files: ./artifacts/**/*
