@@ -143,15 +143,30 @@ jobs:
           cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
           for f in *.dmg; do mv "$f" "${f%.dmg}_universal.dmg"; done
 
-      - name: 打包 macOS 产物
+      - name: 打包 macOS 产物（替换 FRP 为 LingYunFrpLauncher）
         run: |
           mkdir -p ./release-upload/macos
-          cp src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*_x64.dmg ./release-upload/macos/ 2>/dev/null || true
-          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
-          cp src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*_aarch64.dmg ./release-upload/macos/ 2>/dev/null || true
-          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*_universal.dmg ./release-upload/macos/ 2>/dev/null || true
-          cp src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
+          # 处理 dmg 文件
+          for target in x86_64-apple-darwin aarch64-apple-darwin universal-apple-darwin; do
+            for f in src-tauri/target/${target}/release/bundle/dmg/*.dmg; do
+              if [ -f "$f" ]; then
+                filename=$(basename "$f")
+                # 确保 FRP 已替换为 LingYunFrpLauncher（双重保险）
+                new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
+                cp "$f" ./release-upload/macos/"$new_filename"
+              fi
+            done
+          done
+          # 处理 app.tar.gz 文件
+          for target in x86_64-apple-darwin aarch64-apple-darwin universal-apple-darwin; do
+            for f in src-tauri/target/${target}/release/bundle/macos/*.app.tar.gz; do
+              if [ -f "$f" ]; then
+                filename=$(basename "$f")
+                new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
+                cp "$f" ./release-upload/macos/"$new_filename"
+              fi
+            done
+          done
 
       - name: 上传 macOS 构建产物
         uses: actions/upload-artifact@v4
@@ -306,15 +321,25 @@ jobs:
           # 关键：不设置 TAURI_BUNDLE_LINUX_TARGETS，保留默认打包（含 AppImage）
 
       # ========== 恢复 AppImage 产物拷贝 ==========
-      - name: 打包 Linux 产物（含 AppImage）
+      - name: 打包 Linux 产物（含 AppImage，替换 FRP 为 LingYunFrpLauncher）
         run: |
           mkdir -p ./release-upload/linux
           for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            # 恢复 AppImage 拷贝
-            cp src-tauri/target/${target}/release/bundle/deb/*.deb ./release-upload/linux/ 2>/dev/null || true
-            cp src-tauri/target/${target}/release/bundle/appimage/*.AppImage ./release-upload/linux/ 2>/dev/null || true
-            cp src-tauri/target/${target}/release/bundle/rpm/*.rpm ./release-upload/linux/ 2>/dev/null || true
-            cp src-tauri/target/${target}/release/bundle/tar.gz/*.tar.gz ./release-upload/linux/ 2>/dev/null || true
+            # 处理 deb/AppImage/rpm/tar.gz 格式
+            for ext in deb AppImage rpm tar.gz; do
+              # 拼接产物目录（tar.gz 对应 tar.gz 目录，其他对应自身名称）
+              dir=${ext//./}
+              if [ "$ext" = "tar.gz" ]; then dir="tar.gz"; fi
+              # 遍历文件并替换开头的 FRP
+              for file in src-tauri/target/${target}/release/bundle/${dir}/*.$ext; do
+                if [ -f "$file" ]; then
+                  filename=$(basename "$file")
+                  # 替换规则：仅替换开头的 FRP 为 LingYunFrpLauncher
+                  new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
+                  cp "$file" "./release-upload/linux/$new_filename"
+                fi
+              done
+            done
           done
 
       - name: 上传 Linux 构建产物
@@ -361,14 +386,17 @@ jobs:
       - name: 构建 ARM64 版本
         run: pnpm run tauri build --target aarch64-pc-windows-msvc
 
-      - name: 打包 Windows 产物
+      - name: 打包 Windows 产物（替换 FRP 为 LingYunFrpLauncher）
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
           foreach ($target in @("x86_64-pc-windows-msvc", "i686-pc-windows-msvc", "aarch64-pc-windows-msvc")) {
             foreach ($type in @("msi", "nsis", "zip")) {
               $ext = if ($type -eq "msi") { "msi" } elseif ($type -eq "nsis") { "exe" } else { "zip" }
-              Copy-Item -Path "src-tauri/target/$target/release/bundle/$type/*.$ext" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
+              Get-ChildItem -Path "src-tauri/target/$target/release/bundle/$type/*.$ext" | ForEach-Object {
+                $newName = $_.Name -replace '^FRP', 'LingYunFrpLauncher'
+                Copy-Item -Path $_.FullName -Destination "./release-upload/windows/$newName" -ErrorAction SilentlyContinue
+              }
             }
           }
 
