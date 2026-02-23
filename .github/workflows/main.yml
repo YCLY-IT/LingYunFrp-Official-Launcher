@@ -199,38 +199,34 @@ jobs:
       - name: 构建 x64 版本
         run: pnpm run tauri build --target x86_64-unknown-linux-gnu
 
-      # ==========================================
-      # 下面是 ARM64 交叉编译的重点修改部分
-      # ==========================================
+      # ========== 核心新增：安装 QEMU 模拟器（支持 ARM64 可执行文件运行） ==========
+      - name: 安装 QEMU 及二进制格式支持
+        run: |
+          sudo apt-get update
+          # 安装 QEMU 模拟器和二进制格式配置工具
+          sudo apt-get install -y qemu-user-static binfmt-support
+          # 注册 ARM64 二进制文件的自动模拟（关键：让系统识别 ARM64 可执行文件）
+          sudo update-binfmts --enable qemu-aarch64
+          # 验证 QEMU 配置是否生效
+          qemu-aarch64 --version
+          update-binfmts --display | grep aarch64
 
+      # ARM64 交叉编译 - 修正依赖安装
       - name: 配置 ARM64 交叉编译环境
         run: |
-          # 1. 告诉 dpkg 我们要装 arm64 的包
           sudo dpkg --add-architecture arm64
-          
-          # 2. 备份原来的源，防止改错
           sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
-          
-          # 3. 重写 sources.list
-          # 注意：必须用 [arch=xxx] 明确区分架构，否则 apt 会乱
-          # amd64 用 archive.ubuntu.com
-          # arm64 用 ports.ubuntu.com (这是 Ubuntu 官方放非 x86 架构包的地方)
           sudo tee /etc/apt/sources.list > /dev/null <<'EOF'
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
-          
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu  jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu  jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu  jammy-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu  jammy-security main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports  jammy main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports  jammy-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports  jammy-backports main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports  jammy-security main restricted universe multiverse
           EOF
-          
-          # 4. 更新源
           sudo apt-get update
-          
-          # 5. 安装交叉编译工具链 (gcc, g++)
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
@@ -239,34 +235,18 @@ jobs:
 
       - name: 编译 ARM64 版 OpenSSL
         run: |
-          # 为什么要自己编译 OpenSSL？
-          # 因为 Ubuntu 源里的 libssl-dev:arm64 有时候和交叉编译环境配合不好，
-          # 或者 pkg-config 找不到，自己编一份最稳。
-          
           OPENSSL_VERSION="3.2.1"
-          
-          # 下载
           wget -q https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
           tar xzf openssl-${OPENSSL_VERSION}.tar.gz
           cd openssl-${OPENSSL_VERSION}
-          
-          # 设置编译器为 ARM64 的 gcc
           export CC=aarch64-linux-gnu-gcc
           export CXX=aarch64-linux-gnu-g++
-          
-          # 配置：目标平台 linux-aarch64，安装到 /opt/openssl-arm64
           ./Configure linux-aarch64 shared --prefix=/opt/openssl-arm64 --openssldir=/opt/openssl-arm64
-          
-          # 编译安装
           make -j$(nproc)
           sudo make install
-          
-          # 把环境变量写到 GITHUB_ENV 里，后面步骤能用
           echo "OPENSSL_DIR=/opt/openssl-arm64" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=/opt/openssl-arm64/include" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=/opt/openssl-arm64/lib" >> $GITHUB_ENV
-          
-          # 手动生成 pkg-config 的 .pc 文件，防止后面找不到
           sudo mkdir -p /opt/openssl-arm64/lib/pkgconfig
           for pc in openssl libssl libcrypto; do
             sudo tee /opt/openssl-arm64/lib/pkgconfig/${pc}.pc > /dev/null <<EOF
@@ -284,9 +264,6 @@ jobs:
 
       - name: 安装 ARM64 依赖库
         run: |
-          # 注意：这里去掉了之前的 2>/dev/null || true
-          # 如果这些库安装失败，构建肯定会报错，不如让它在这里停住，方便排查
-          # 特别是 libayatana-appindicator3-dev:arm64，这是之前报错找不到的
           sudo apt-get install -y \
             libgtk-3-dev:arm64 \
             libglib2.0-dev:arm64 \
@@ -300,55 +277,39 @@ jobs:
       - name: 配置 Cargo 交叉编译
         run: |
           mkdir -p ~/.cargo
-          
-          # 写 Cargo 的配置文件
           cat > ~/.cargo/config.toml << 'EOF'
           [target.aarch64-unknown-linux-gnu]
-          # 指定链接器
           linker = "aarch64-linux-gnu-gcc"
-          # 额外告诉 rustc 去哪里找库
           rustflags = ["-L/usr/aarch64-linux-gnu/lib", "-L/opt/openssl-arm64/lib"]
-          
           [env]
-          # 允许交叉编译
           PKG_CONFIG_ALLOW_CROSS = "1"
-          # 指定 pkg-config 程序位置
           PKG_CONFIG = "/usr/bin/pkg-config"
-          
-          # =======================================================
-          # 关键修改 1：去掉了 PKG_CONFIG_SYSROOT_DIR
-          # 之前的错误 "/usr/aarch64-linux-gnu/usr/lib/..." 就是因为设了这个
-          # 它会把路径拼重，现在我们直接告诉 pkg-config 去哪里找 .pc 文件
-          # =======================================================
-          
-          # 关键修改 2：明确指定 pkgconfig 路径
-          # 第一个路径是系统装的 :arm64 库的 pc 文件位置
-          # 第二个路径是我们自己编的 OpenSSL 的 pc 文件位置
-          PKG_CONFIG_PATH = "/usr/lib/aarch64-linux-gnu/pkgconfig:/opt/openssl-arm64/lib/pkgconfig"
-          
-          # OpenSSL 相关变量
+          PKG_CONFIG_PATH = "/opt/openssl-arm64/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
           OPENSSL_STATIC = "1"
           OPENSSL_DIR = "/opt/openssl-arm64"
           OPENSSL_INCLUDE_DIR = "/opt/openssl-arm64/include"
           OPENSSL_LIB_DIR = "/opt/openssl-arm64/lib"
           EOF
 
-      - name: 构建 ARM64 版本
+      # ========== 保留 AppImage 打包：移除禁用环境变量 ==========
+      - name: 构建 ARM64 版本（保留 AppImage）
         run: pnpm run tauri build --target aarch64-unknown-linux-gnu
         env:
-          # 再次确保这些环境变量生效，双重保险
           CC: aarch64-linux-gnu-gcc
           CXX: aarch64-linux-gnu-g++
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          PKG_CONFIG_PATH: "/usr/lib/aarch64-linux-gnu/pkgconfig:/opt/openssl-arm64/lib/pkgconfig"
           PKG_CONFIG_ALLOW_CROSS: "1"
           OPENSSL_STATIC: "1"
           OPENSSL_DIR: "/opt/openssl-arm64"
+          PKG_CONFIG_PATH: "/opt/openssl-arm64/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
+          # 关键：不设置 TAURI_BUNDLE_LINUX_TARGETS，保留默认打包（含 AppImage）
 
-      - name: 打包 Linux 产物
+      # ========== 恢复 AppImage 产物拷贝 ==========
+      - name: 打包 Linux 产物（含 AppImage）
         run: |
           mkdir -p ./release-upload/linux
           for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            # 恢复 AppImage 拷贝
             cp src-tauri/target/${target}/release/bundle/deb/*.deb ./release-upload/linux/ 2>/dev/null || true
             cp src-tauri/target/${target}/release/bundle/appimage/*.AppImage ./release-upload/linux/ 2>/dev/null || true
             cp src-tauri/target/${target}/release/bundle/rpm/*.rpm ./release-upload/linux/ 2>/dev/null || true
@@ -361,7 +322,7 @@ jobs:
           name: linux-all
           path: ./release-upload/linux/*
           retention-days: 1
-
+          
   build-windows:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
