@@ -398,12 +398,19 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
+          # 仅遍历 Tauri 实际生成的产物类型：msi、nsis（移除 zip）
           foreach ($target in @("x86_64-pc-windows-msvc", "i686-pc-windows-msvc", "aarch64-pc-windows-msvc")) {
-            foreach ($type in @("msi", "nsis", "zip")) {
-              $ext = if ($type -eq "msi") { "msi" } elseif ($type -eq "nsis") { "exe" } else { "zip" }
-              Get-ChildItem -Path "src-tauri/target/$target/release/bundle/$type/*.$ext" | ForEach-Object {
-                $newName = $_.Name -replace '^FRP', 'LingYunFrpLauncher'
-                Copy-Item -Path $_.FullName -Destination "./release-upload/windows/$newName" -ErrorAction SilentlyContinue
+            foreach ($type in @("msi", "nsis")) {
+              $ext = if ($type -eq "msi") { "msi" } elseif ($type -eq "nsis") { "exe" }
+              $bundlePath = "src-tauri/target/$target/release/bundle/$type"
+              # 关键：先检查目录是否存在，不存在则跳过
+              if (Test-Path -Path $bundlePath) {
+                Get-ChildItem -Path "$bundlePath/*.$ext" | ForEach-Object {
+                  $newName = $_.Name -replace '^FRP', 'LingYunFrpLauncher'
+                  Copy-Item -Path $_.FullName -Destination "./release-upload/windows/$newName" -ErrorAction SilentlyContinue
+                }
+              } else {
+                Write-Host "目录不存在，跳过：$bundlePath"
               }
             }
           }
