@@ -101,6 +101,6 @@ pnpm run tauri build
 - 官网：[https://www.lyfrp.cn](https://www.lyfrp.cn)
 - 邮箱：1263115878@qq.com
 - QQ群：882670857
-- GitHub：[https://github.com/YCLY-IT/LingYunFrp-Client-Launcher](https://github.com/YCLY-IT/LingYunFrp-Client-Launcher)
+- GitHub：[https://github.com/YCLY-IT/LingYunFrp-Client-Launcher](https://github.com/YCLY-IT/LingYunFrp-Official-Launcher)
 
 ---
