@@ -36,7 +36,6 @@ on:
         default: ""
         type: string
       
-      # ========== 核心修改：release_notes 改为多行文本框 ==========
       release_notes:
         description: "更新说明（支持多行 Markdown，可直接写源码）"
         required: false
@@ -45,8 +44,7 @@ on:
           - 修复已知 Bug
           - 优化性能
           - 新增功能：XXX
-        type: text  # text 类型在 GitHub 中会渲染为多行 textarea
-        # 关键：GitHub 的 type: text 会自动变成多行输入框，支持换行、源码预览
+        type: text
       
       force_recreate:
         description: "如果 Release 已存在，是否强制更新"
@@ -54,6 +52,7 @@ on:
         default: false
         type: boolean
 
+# ========== 核心：完整的 jobs 节点（必填） ==========
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -85,19 +84,24 @@ jobs:
           fi
           echo "title=$TITLE" >> $GITHUB_OUTPUT
       
-      # ========== 优化：多行 Markdown 转义处理 ==========
-      - name: 确定更新说明（支持多行Markdown）
+      # 无 YAML 语法错的更新说明处理
+      - name: 确定更新说明（无 YAML 语法错）
         id: set-notes
         shell: bash
         run: |
+          BUILD_VERSION="${{ steps.set-version.outputs.version }}"
+          BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          INPUT_VERSION="${{ inputs.version }}"
+          
           if [ "${{ github.event_name }}" == "push" ]; then
-            NOTES="🎉 自动构建发布"
+            NOTES="🎉 自动构建发布 - 构建版本：${BUILD_VERSION} - 构建时间：${BUILD_TIME}"
           elif [ -n "${{ inputs.release_notes }}" ]; then
             NOTES="${{ inputs.release_notes }}"
           else
-            NOTES="🚀 手动构建发布"
+            NOTES="🚀 手动构建发布 - 构建版本：${INPUT_VERSION} - 构建时间：${BUILD_TIME}"
           fi
-          echo "notes=$NOTES" >> $GITHUB_OUTPUT
+          
+          echo -n "notes=$NOTES" >> $GITHUB_OUTPUT
 
   build-macos:
     needs: prepare
@@ -133,7 +137,10 @@ jobs:
       - name: 重命名 x64 安装包
         run: |
           cd src-tauri/target/x86_64-apple-darwin/release/bundle/dmg
-          for f in *.dmg; do mv "$f" "${f%.dmg}_x64.dmg"; done
+          for f in *.dmg; do 
+            new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/' | sed 's/\.dmg/_x64.dmg/')
+            mv "$f" "$new_f"
+          done
 
       - name: 构建 Apple Silicon 版本 (ARM64)
         run: pnpm run tauri build --target aarch64-apple-darwin
@@ -141,7 +148,10 @@ jobs:
       - name: 重命名 ARM64 安装包
         run: |
           cd src-tauri/target/aarch64-apple-darwin/release/bundle/dmg
-          for f in *.dmg; do mv "$f" "${f%.dmg}_aarch64.dmg"; done
+          for f in *.dmg; do 
+            new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/' | sed 's/\.dmg/_aarch64.dmg/')
+            mv "$f" "$new_f"
+          done
 
       - name: 构建通用版本 (Universal)
         run: pnpm run tauri build --target universal-apple-darwin
@@ -149,29 +159,24 @@ jobs:
       - name: 重命名 Universal 安装包
         run: |
           cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
-          for f in *.dmg; do mv "$f" "${f%.dmg}_universal.dmg"; done
+          for f in *.dmg; do 
+            new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/' | sed 's/\.dmg/_universal.dmg/')
+            mv "$f" "$new_f"
+          done
 
-      - name: 打包 macOS 产物（替换 FRP 为 LingYunFrpLauncher）
+      - name: 打包 macOS 产物
         run: |
           mkdir -p ./release-upload/macos
-          # 处理 dmg 文件
           for target in x86_64-apple-darwin aarch64-apple-darwin universal-apple-darwin; do
             for f in src-tauri/target/${target}/release/bundle/dmg/*.dmg; do
               if [ -f "$f" ]; then
-                filename=$(basename "$f")
-                # 确保 FRP 已替换为 LingYunFrpLauncher（双重保险）
-                new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
-                cp "$f" ./release-upload/macos/"$new_filename"
+                cp "$f" ./release-upload/macos/
               fi
             done
-          done
-          # 处理 app.tar.gz 文件
-          for target in x86_64-apple-darwin aarch64-apple-darwin universal-apple-darwin; do
             for f in src-tauri/target/${target}/release/bundle/macos/*.app.tar.gz; do
               if [ -f "$f" ]; then
-                filename=$(basename "$f")
-                new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
-                cp "$f" ./release-upload/macos/"$new_filename"
+                new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/')
+                cp "$f" ./release-upload/macos/"$new_f"
               fi
             done
           done
@@ -222,20 +227,14 @@ jobs:
       - name: 构建 x64 版本
         run: pnpm run tauri build --target x86_64-unknown-linux-gnu
 
-      # ========== 安装 QEMU 模拟器（支持 ARM64 可执行文件运行） ==========
       - name: 安装 QEMU 及二进制格式支持（修正命令错误）
         run: |
           sudo apt-get update
-          # 安装 QEMU 模拟器和二进制格式配置工具
           sudo apt-get install -y qemu-user-static binfmt-support
-          # 强制重新配置 binfmt，确保 ARM64 模拟生效（忽略"已启用"警告）
           sudo update-binfmts --package qemu-user-static --install qemu-aarch64 /usr/bin/qemu-aarch64-static --magic '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00' --mask '\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
-          # 验证 binfmt 配置是否生效（核心验证，替代版本检查）
           update-binfmts --display | grep -E 'aarch64|qemu'
-          # 可选：验证 qemu-aarch64-static 文件是否存在
           ls -la /usr/bin/qemu-aarch64-static
 
-      # ARM64 交叉编译 - 修正依赖安装
       - name: 配置 ARM64 交叉编译环境
         run: |
           sudo dpkg --add-architecture arm64
@@ -315,7 +314,6 @@ jobs:
           OPENSSL_LIB_DIR = "/opt/openssl-arm64/lib"
           EOF
 
-      # ========== 保留 AppImage 打包：移除禁用环境变量 ==========
       - name: 构建 ARM64 版本（保留 AppImage）
         run: pnpm run tauri build --target aarch64-unknown-linux-gnu
         env:
@@ -326,23 +324,17 @@ jobs:
           OPENSSL_STATIC: "1"
           OPENSSL_DIR: "/opt/openssl-arm64"
           PKG_CONFIG_PATH: "/opt/openssl-arm64/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
-          # 关键：不设置 TAURI_BUNDLE_LINUX_TARGETS，保留默认打包（含 AppImage）
 
-      # ========== 恢复 AppImage 产物拷贝 ==========
-      - name: 打包 Linux 产物（含 AppImage，替换 FRP 为 LingYunFrpLauncher）
+      - name: 打包 Linux 产物（含 AppImage）
         run: |
           mkdir -p ./release-upload/linux
           for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            # 处理 deb/AppImage/rpm/tar.gz 格式
             for ext in deb AppImage rpm tar.gz; do
-              # 拼接产物目录（tar.gz 对应 tar.gz 目录，其他对应自身名称）
               dir=${ext//./}
               if [ "$ext" = "tar.gz" ]; then dir="tar.gz"; fi
-              # 遍历文件并替换开头的 FRP
               for file in src-tauri/target/${target}/release/bundle/${dir}/*.$ext; do
                 if [ -f "$file" ]; then
                   filename=$(basename "$file")
-                  # 替换规则：仅替换开头的 FRP 为 LingYunFrpLauncher
                   new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
                   cp "$file" "./release-upload/linux/$new_filename"
                 fi
@@ -394,23 +386,21 @@ jobs:
       - name: 构建 ARM64 版本
         run: pnpm run tauri build --target aarch64-pc-windows-msvc
 
-      - name: 打包 Windows 产物（替换 FRP 为 LingYunFrpLauncher）
+      - name: 打包 Windows 产物
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
-          # 仅遍历 Tauri 实际生成的产物类型：msi、nsis（移除 zip）
           foreach ($target in @("x86_64-pc-windows-msvc", "i686-pc-windows-msvc", "aarch64-pc-windows-msvc")) {
             foreach ($type in @("msi", "nsis")) {
               $ext = if ($type -eq "msi") { "msi" } elseif ($type -eq "nsis") { "exe" }
               $bundlePath = "src-tauri/target/$target/release/bundle/$type"
-              # 关键：先检查目录是否存在，不存在则跳过
               if (Test-Path -Path $bundlePath) {
                 Get-ChildItem -Path "$bundlePath/*.$ext" | ForEach-Object {
                   $newName = $_.Name -replace '^FRP', 'LingYunFrpLauncher'
-                  Copy-Item -Path $_.FullName -Destination "./release-upload/windows/$newName" -ErrorAction SilentlyContinue
+                  Copy-Item -Path $_.FullName -Destination "./release-upload/windows/$newName" -Force
                 }
               } else {
-                Write-Host "目录不存在，跳过：$bundlePath"
+                Write-Host "跳过不存在的目录：$bundlePath"
               }
             }
           }
@@ -437,9 +427,9 @@ jobs:
           path: ./artifacts
           merge-multiple: true
 
-      - name: 查看产物列表
+      - name: 查看产物列表（调试用）
         run: |
-          echo "构建产物:"
+          echo "最终产物列表："
           find ./artifacts -type f -ls
 
       - name: 删除已存在的 Release（强制更新时）
@@ -451,7 +441,6 @@ jobs:
           gh release delete "$VERSION" --yes 2>/dev/null || echo "Release $VERSION 不存在，无需删除"
           git push origin :refs/tags/$VERSION 2>/dev/null || echo "标签 $VERSION 不存在，无需删除"
 
-      # ========== 优化：Release 正文支持完整 Markdown 渲染 ==========
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
@@ -467,7 +456,8 @@ jobs:
             - 工作流编号：`${{ github.run_id }}`
             - 构建时间：`$(date +'%Y-%m-%d %H:%M:%S')`
             - 触发方式：${{ github.event_name == 'push' && '标签推送' || '手动触发' }}
-          files: ./artifacts/**/*
+          files: |
+            ./artifacts/**/*
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'beta') || contains(needs.prepare.outputs.version, 'alpha') || contains(needs.prepare.outputs.version, 'rc') }}
           generate_release_notes: false
