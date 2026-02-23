@@ -31,20 +31,17 @@ on:
           - windows
       
       release_title:
-        description: "Release 标题（可选，默认：🎉 Release v版本号）"
+        description: "Release 标题（可选，默认使用版本号）"
         required: false
         default: ""
         type: string
       
+      # 改为 string 类型，多行用 \n 分隔
       release_notes:
-        description: "更新说明（支持多行 Markdown，可直接写源码）"
+        description: "更新说明（支持 \\n 换行，例如：修复Bug\\n优化性能）"
         required: false
-        default: |
-          ## 🚀 新版本发布
-          - 修复已知 Bug
-          - 优化性能
-          - 新增功能：XXX
-        type: text
+        default: ""
+        type: string
       
       force_recreate:
         description: "如果 Release 已存在，是否强制更新"
@@ -52,7 +49,6 @@ on:
         default: false
         type: boolean
 
-# ========== 核心：完整的 jobs 节点（必填） ==========
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -76,32 +72,32 @@ jobs:
         id: set-title
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
-            TITLE="🎉 Release ${{ steps.set-version.outputs.version }}"
+            TITLE="${{ steps.set-version.outputs.version }}"
           elif [ -n "${{ inputs.release_title }}" ]; then
             TITLE="${{ inputs.release_title }}"
           else
-            TITLE="🎉 Release ${{ inputs.version }}"
+            TITLE="${{ inputs.version }}"
           fi
           echo "title=$TITLE" >> $GITHUB_OUTPUT
       
-      # 无 YAML 语法错的更新说明处理
-      - name: 确定更新说明（无 YAML 语法错）
+      - name: 确定更新说明
         id: set-notes
-        shell: bash
         run: |
-          BUILD_VERSION="${{ steps.set-version.outputs.version }}"
           BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-          INPUT_VERSION="${{ inputs.version }}"
           
           if [ "${{ github.event_name }}" == "push" ]; then
-            NOTES="🎉 自动构建发布 - 构建版本：${BUILD_VERSION} - 构建时间：${BUILD_TIME}"
+            NOTES="自动构建发布 - 时间：${BUILD_TIME}"
           elif [ -n "${{ inputs.release_notes }}" ]; then
-            NOTES="${{ inputs.release_notes }}"
+            # 将输入的 \n 转换为真实换行
+            NOTES=$(echo "${{ inputs.release_notes }}" | sed 's/\\n/\n/g')
           else
-            NOTES="🚀 手动构建发布 - 构建版本：${INPUT_VERSION} - 构建时间：${BUILD_TIME}"
+            NOTES="手动构建发布 - 时间：${BUILD_TIME}"
           fi
           
-          echo -n "notes=$NOTES" >> $GITHUB_OUTPUT
+          # 使用多行输出
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
   build-macos:
     needs: prepare
@@ -169,14 +165,12 @@ jobs:
           mkdir -p ./release-upload/macos
           for target in x86_64-apple-darwin aarch64-apple-darwin universal-apple-darwin; do
             for f in src-tauri/target/${target}/release/bundle/dmg/*.dmg; do
-              if [ -f "$f" ]; then
-                cp "$f" ./release-upload/macos/
-              fi
+              [ -f "$f" ] && cp "$f" ./release-upload/macos/
             done
             for f in src-tauri/target/${target}/release/bundle/macos/*.app.tar.gz; do
               if [ -f "$f" ]; then
                 new_f=$(echo "$f" | sed 's/^FRP/LingYunFrpLauncher/')
-                cp "$f" ./release-upload/macos/"$new_f"
+                cp "$f" ./release-upload/macos/"$(basename "$new_f")"
               fi
             done
           done
@@ -227,118 +221,21 @@ jobs:
       - name: 构建 x64 版本
         run: pnpm run tauri build --target x86_64-unknown-linux-gnu
 
-      - name: 安装 QEMU 及二进制格式支持（修正命令错误）
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-user-static binfmt-support
-          sudo update-binfmts --package qemu-user-static --install qemu-aarch64 /usr/bin/qemu-aarch64-static --magic '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00' --mask '\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
-          update-binfmts --display | grep -E 'aarch64|qemu'
-          ls -la /usr/bin/qemu-aarch64-static
+      # 暂时跳过 ARM64，先保证 x64 能正常工作
+      # 后续可以单独修复 ARM64 的 AppImage 打包问题
 
-      - name: 配置 ARM64 交叉编译环境
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
-          sudo tee /etc/apt/sources.list > /dev/null <<'EOF'
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu  jammy main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu  jammy-updates main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu  jammy-backports main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu  jammy-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports  jammy main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports  jammy-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports  jammy-backports main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports  jammy-security main restricted universe multiverse
-          EOF
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            patchelf perl wget
-
-      - name: 编译 ARM64 版 OpenSSL
-        run: |
-          OPENSSL_VERSION="3.2.1"
-          wget -q https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
-          tar xzf openssl-${OPENSSL_VERSION}.tar.gz
-          cd openssl-${OPENSSL_VERSION}
-          export CC=aarch64-linux-gnu-gcc
-          export CXX=aarch64-linux-gnu-g++
-          ./Configure linux-aarch64 shared --prefix=/opt/openssl-arm64 --openssldir=/opt/openssl-arm64
-          make -j$(nproc)
-          sudo make install
-          echo "OPENSSL_DIR=/opt/openssl-arm64" >> $GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=/opt/openssl-arm64/include" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=/opt/openssl-arm64/lib" >> $GITHUB_ENV
-          sudo mkdir -p /opt/openssl-arm64/lib/pkgconfig
-          for pc in openssl libssl libcrypto; do
-            sudo tee /opt/openssl-arm64/lib/pkgconfig/${pc}.pc > /dev/null <<EOF
-          prefix=/opt/openssl-arm64
-          exec_prefix=\${prefix}
-          libdir=\${exec_prefix}/lib
-          includedir=\${prefix}/include
-          Name: OpenSSL
-          Description: OpenSSL library
-          Version: 3.2.1
-          Libs: -L\${libdir} -l${pc//lib/}
-          Cflags: -I\${includedir}
-          EOF
-          done
-
-      - name: 安装 ARM64 依赖库
-        run: |
-          sudo apt-get install -y \
-            libgtk-3-dev:arm64 \
-            libglib2.0-dev:arm64 \
-            libsoup-3.0-dev:arm64 \
-            libwebkit2gtk-4.1-dev:arm64 \
-            libjavascriptcoregtk-4.1-dev:arm64 \
-            libayatana-appindicator3-dev:arm64 \
-            librsvg2-dev:arm64 \
-            libssl-dev:arm64
-
-      - name: 配置 Cargo 交叉编译
-        run: |
-          mkdir -p ~/.cargo
-          cat > ~/.cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          rustflags = ["-L/usr/aarch64-linux-gnu/lib", "-L/opt/openssl-arm64/lib"]
-          [env]
-          PKG_CONFIG_ALLOW_CROSS = "1"
-          PKG_CONFIG = "/usr/bin/pkg-config"
-          PKG_CONFIG_PATH = "/opt/openssl-arm64/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
-          OPENSSL_STATIC = "1"
-          OPENSSL_DIR = "/opt/openssl-arm64"
-          OPENSSL_INCLUDE_DIR = "/opt/openssl-arm64/include"
-          OPENSSL_LIB_DIR = "/opt/openssl-arm64/lib"
-          EOF
-
-      - name: 构建 ARM64 版本（保留 AppImage）
-        run: pnpm run tauri build --target aarch64-unknown-linux-gnu
-        env:
-          CC: aarch64-linux-gnu-gcc
-          CXX: aarch64-linux-gnu-g++
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          PKG_CONFIG_ALLOW_CROSS: "1"
-          OPENSSL_STATIC: "1"
-          OPENSSL_DIR: "/opt/openssl-arm64"
-          PKG_CONFIG_PATH: "/opt/openssl-arm64/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
-
-      - name: 打包 Linux 产物（含 AppImage）
+      - name: 打包 Linux 产物
         run: |
           mkdir -p ./release-upload/linux
-          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            for ext in deb AppImage rpm tar.gz; do
-              dir=${ext//./}
-              if [ "$ext" = "tar.gz" ]; then dir="tar.gz"; fi
-              for file in src-tauri/target/${target}/release/bundle/${dir}/*.$ext; do
-                if [ -f "$file" ]; then
-                  filename=$(basename "$file")
-                  new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
-                  cp "$file" "./release-upload/linux/$new_filename"
-                fi
-              done
+          for ext in deb AppImage rpm tar.gz; do
+            dir=${ext//./}
+            [ "$ext" = "tar.gz" ] && dir="tar.gz"
+            for file in src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/${dir}/*.$ext; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                new_filename=$(echo "$filename" | sed 's/^FRP/LingYunFrpLauncher/')
+                cp "$file" "./release-upload/linux/$new_filename"
+              fi
             done
           done
 
@@ -348,7 +245,7 @@ jobs:
           name: linux-all
           path: ./release-upload/linux/*
           retention-days: 1
-          
+
   build-windows:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
@@ -392,15 +289,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
           foreach ($target in @("x86_64-pc-windows-msvc", "i686-pc-windows-msvc", "aarch64-pc-windows-msvc")) {
             foreach ($type in @("msi", "nsis")) {
-              $ext = if ($type -eq "msi") { "msi" } elseif ($type -eq "nsis") { "exe" }
+              $ext = if ($type -eq "msi") { "msi" } else { "exe" }
               $bundlePath = "src-tauri/target/$target/release/bundle/$type"
-              if (Test-Path -Path $bundlePath) {
-                Get-ChildItem -Path "$bundlePath/*.$ext" | ForEach-Object {
+              if (Test-Path $bundlePath) {
+                Get-ChildItem "$bundlePath/*.$ext" -ErrorAction SilentlyContinue | ForEach-Object {
                   $newName = $_.Name -replace '^FRP', 'LingYunFrpLauncher'
-                  Copy-Item -Path $_.FullName -Destination "./release-upload/windows/$newName" -Force
+                  Copy-Item $_.FullName "./release-upload/windows/$newName" -Force
                 }
-              } else {
-                Write-Host "跳过不存在的目录：$bundlePath"
               }
             }
           }
@@ -427,10 +322,8 @@ jobs:
           path: ./artifacts
           merge-multiple: true
 
-      - name: 查看产物列表（调试用）
-        run: |
-          echo "最终产物列表："
-          find ./artifacts -type f -ls
+      - name: 查看产物列表
+        run: find ./artifacts -type f
 
       - name: 删除已存在的 Release（强制更新时）
         if: ${{ inputs.force_recreate == true }}
@@ -438,26 +331,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
-          gh release delete "$VERSION" --yes 2>/dev/null || echo "Release $VERSION 不存在，无需删除"
-          git push origin :refs/tags/$VERSION 2>/dev/null || echo "标签 $VERSION 不存在，无需删除"
+          gh release delete "$VERSION" --yes 2>/dev/null || true
+          git push origin :refs/tags/$VERSION 2>/dev/null || true
 
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.version }}
           name: ${{ needs.prepare.outputs.title }}
-          body: |
-            ## 📝 更新日志
-            ${{ needs.prepare.outputs.notes }}
-
-            ---
-            ## 📌 构建信息
-            - 版本号：`${{ needs.prepare.outputs.version }}`
-            - 工作流编号：`${{ github.run_id }}`
-            - 构建时间：`$(date +'%Y-%m-%d %H:%M:%S')`
-            - 触发方式：${{ github.event_name == 'push' && '标签推送' || '手动触发' }}
-          files: |
-            ./artifacts/**/*
+          body: ${{ needs.prepare.outputs.notes }}
+          files: ./artifacts/**/*
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'beta') || contains(needs.prepare.outputs.version, 'alpha') || contains(needs.prepare.outputs.version, 'rc') }}
           generate_release_notes: false
