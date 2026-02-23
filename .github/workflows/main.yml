@@ -1,4 +1,4 @@
-name: Build Project and Release
+name: Build Private Project and Release
 
 permissions:
   contents: write
@@ -8,13 +8,21 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  # 推送标签时自动触发
   push:
     tags:
       - "v*"
+  
+  # 手动触发，支持自定义版本
   workflow_dispatch:
     inputs:
+      version:
+        description: "版本号（例如 v1.0.0）"
+        required: true
+        type: string
+      
       platform:
-        description: "Select platform to build"
+        description: "选择构建平台"
         required: true
         default: "all"
         type: choice
@@ -23,19 +31,76 @@ on:
           - macos
           - linux
           - windows
-      create_release:
-        description: "Create GitHub Release"
+      
+      release_title:
+        description: "Release 标题（可选，默认使用版本号）"
+        required: false
+        default: ""
+        type: string
+      
+      release_notes:
+        description: "更新说明（可选）"
+        required: false
+        default: ""
+        type: string
+      
+      force_recreate:
+        description: "如果 Release 已存在，是否强制更新"
         required: false
         default: false
         type: boolean
 
 jobs:
-  # ==================== macOS (x64 + ARM64 + Universal) ====================
+  # 准备阶段：确定版本号等信息
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+      title: ${{ steps.set-title.outputs.title }}
+      notes: ${{ steps.set-notes.outputs.notes }}
+    steps:
+      - name: 确定版本号
+        id: set-version
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "构建版本: $VERSION"
+      
+      - name: 确定 Release 标题
+        id: set-title
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            TITLE="${{ steps.set-version.outputs.version }}"
+          elif [ -n "${{ inputs.release_title }}" ]; then
+            TITLE="${{ inputs.release_title }}"
+          else
+            TITLE="${{ inputs.version }}"
+          fi
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+      
+      - name: 确定更新说明
+        id: set-notes
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            NOTES="自动构建发布"
+          elif [ -n "${{ inputs.release_notes }}" ]; then
+            NOTES="${{ inputs.release_notes }}"
+          else
+            NOTES="手动构建发布"
+          fi
+          echo "notes=$NOTES" >> $GITHUB_OUTPUT
+
+  # macOS 构建任务
   build-macos:
-    if: ${{ github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos' }}
+    needs: prepare
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos' }}
     runs-on: macos-latest
     steps:
-      - name: Checkout Private Repository
+      - name: 拉取私有仓库代码
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
@@ -50,43 +115,43 @@ jobs:
           node-version: 22
           cache: "pnpm"
           
-      - name: Install dependencies
+      - name: 安装依赖
         run: pnpm install
         
-      - name: Install Rust
+      - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      # Build x64
-      - name: Build Tauri (x64)
+      # x64 架构构建
+      - name: 构建 Intel 版本 (x64)
         run: pnpm run tauri build --target x86_64-apple-darwin
         
-      - name: Rename x64 dmg
+      - name: 重命名 x64 安装包
         run: |
           cd src-tauri/target/x86_64-apple-darwin/release/bundle/dmg
           for f in *.dmg; do mv "$f" "${f%.dmg}_x64.dmg"; done
 
-      # Build ARM64
-      - name: Build Tauri (ARM64)
+      # ARM64 架构构建
+      - name: 构建 Apple Silicon 版本 (ARM64)
         run: pnpm run tauri build --target aarch64-apple-darwin
         
-      - name: Rename aarch64 dmg
+      - name: 重命名 ARM64 安装包
         run: |
           cd src-tauri/target/aarch64-apple-darwin/release/bundle/dmg
           for f in *.dmg; do mv "$f" "${f%.dmg}_aarch64.dmg"; done
 
-      # Build Universal
-      - name: Build Tauri (Universal)
+      # 通用架构构建
+      - name: 构建通用版本 (Universal)
         run: pnpm run tauri build --target universal-apple-darwin
         
-      - name: Rename universal dmg
+      - name: 重命名 Universal 安装包
         run: |
           cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
           for f in *.dmg; do mv "$f" "${f%.dmg}_universal.dmg"; done
 
-      # 打包所有 macOS 产物
-      - name: Package macOS artifacts
+      # 收集产物
+      - name: 打包 macOS 产物
         run: |
           mkdir -p ./release-upload/macos
           cp src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*_x64.dmg ./release-upload/macos/ 2>/dev/null || true
@@ -95,21 +160,21 @@ jobs:
           cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
           cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*_universal.dmg ./release-upload/macos/ 2>/dev/null || true
           cp src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
-          ls -la ./release-upload/macos/
 
-      - name: Upload macOS artifacts
+      - name: 上传 macOS 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: macos-all
           path: ./release-upload/macos/*
           retention-days: 1
 
-  # ==================== Linux (x64 + ARM64) ====================
+  # Linux 构建任务
   build-linux:
-    if: ${{ github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'linux' }}
+    needs: prepare
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Private Repository
+      - name: 拉取私有仓库代码
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
@@ -124,35 +189,28 @@ jobs:
           node-version: 22
           cache: "pnpm"
           
-      - name: Install dependencies
+      - name: 安装依赖
         run: pnpm install
 
-      - name: Install Rust
+      - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
 
-      # ==================== Build x64 ====================
-      - name: Install system dependencies (x64)
+      # x64 架构构建
+      - name: 安装 x64 编译依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
-            libglib2.0-dev \
-            libsoup-3.0-dev \
-            pkg-config \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
+            libgtk-3-dev libglib2.0-dev libsoup-3.0-dev pkg-config \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
-      - name: Build Tauri (x64)
+      - name: 构建 x64 版本
         run: pnpm run tauri build --target x86_64-unknown-linux-gnu
 
-      # ==================== Build ARM64 ====================
-      - name: Setup ARM64 cross compilation
+      # ARM64 交叉编译准备
+      - name: 配置 ARM64 交叉编译环境
         run: |
           sudo dpkg --add-architecture arm64
           sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
@@ -168,15 +226,10 @@ jobs:
           EOF
           sudo apt-get update
           sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            pkg-config-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            patchelf \
-            perl \
-            wget
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            pkg-config-aarch64-linux-gnu libc6-dev-arm64-cross patchelf perl wget
 
-      - name: Build OpenSSL for ARM64
+      - name: 编译 ARM64 版 OpenSSL
         run: |
           OPENSSL_VERSION="3.2.1"
           wget -q https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
@@ -191,53 +244,28 @@ jobs:
           echo "OPENSSL_INCLUDE_DIR=/opt/openssl-arm64/include" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=/opt/openssl-arm64/lib" >> $GITHUB_ENV
           sudo mkdir -p /opt/openssl-arm64/lib/pkgconfig
-          sudo tee /opt/openssl-arm64/lib/pkgconfig/openssl.pc > /dev/null <<EOF
+          for pc in openssl libssl libcrypto; do
+            sudo tee /opt/openssl-arm64/lib/pkgconfig/${pc}.pc > /dev/null <<EOF
           prefix=/opt/openssl-arm64
           exec_prefix=\${prefix}
           libdir=\${exec_prefix}/lib
           includedir=\${prefix}/include
           Name: OpenSSL
-          Description: Secure Sockets Layer and cryptography libraries and tools
+          Description: OpenSSL library
           Version: 3.2.1
-          Libs: -L\${libdir} -lssl -lcrypto
+          Libs: -L\${libdir} -l${pc//lib/}
           Cflags: -I\${includedir}
           EOF
-          sudo tee /opt/openssl-arm64/lib/pkgconfig/libssl.pc > /dev/null <<EOF
-          prefix=/opt/openssl-arm64
-          exec_prefix=\${prefix}
-          libdir=\${exec_prefix}/lib
-          includedir=\${prefix}/include
-          Name: OpenSSL-libssl
-          Description: Secure Sockets Layer and cryptography libraries
-          Version: 3.2.1
-          Libs: -L\${libdir} -lssl
-          Cflags: -I\${includedir}
-          EOF
-          sudo tee /opt/openssl-arm64/lib/pkgconfig/libcrypto.pc > /dev/null <<EOF
-          prefix=/opt/openssl-arm64
-          exec_prefix=\${prefix}
-          libdir=\${exec_prefix}/lib
-          includedir=\${prefix}/include
-          Name: OpenSSL-libcrypto
-          Description: OpenSSL cryptography library
-          Version: 3.2.1
-          Libs: -L\${libdir} -lcrypto
-          Cflags: -I\${includedir}
-          EOF
+          done
 
-      - name: Install Tauri dependencies (ARM64)
+      - name: 安装 ARM64 依赖库
         run: |
           sudo apt-get install -y \
-            libgtk-3-dev:arm64 \
-            libglib2.0-dev:arm64 \
-            libsoup-3.0-dev:arm64 \
-            libwebkit2gtk-4.1-dev:arm64 \
-            libjavascriptcoregtk-4.1-dev:arm64 \
-            libayatana-appindicator3-dev:arm64 \
-            librsvg2-dev:arm64 \
-            libssl-dev:arm64 || true
+            libgtk-3-dev:arm64 libglib2.0-dev:arm64 libsoup-3.0-dev:arm64 \
+            libwebkit2gtk-4.1-dev:arm64 libjavascriptcoregtk-4.1-dev:arm64 \
+            libayatana-appindicator3-dev:arm64 librsvg2-dev:arm64 libssl-dev:arm64 || true
 
-      - name: Configure Cargo for ARM64
+      - name: 配置 Cargo 交叉编译
         run: |
           mkdir -p ~/.cargo
           cat > ~/.cargo/config.toml << 'EOF'
@@ -253,7 +281,7 @@ jobs:
           PKG_CONFIG_PATH = "/opt/openssl-arm64/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
           EOF
 
-      - name: Build Tauri (ARM64)
+      - name: 构建 ARM64 版本
         run: pnpm run tauri build --target aarch64-unknown-linux-gnu
         env:
           PKG_CONFIG_ALLOW_CROSS: "1"
@@ -266,33 +294,30 @@ jobs:
           CC: aarch64-linux-gnu-gcc
           CXX: aarch64-linux-gnu-g++
 
-      # 打包 Linux 产物
-      - name: Package Linux artifacts
+      - name: 打包 Linux 产物
         run: |
           mkdir -p ./release-upload/linux
-          cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb ./release-upload/linux/ 2>/dev/null || true
-          cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage ./release-upload/linux/ 2>/dev/null || true
-          cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm ./release-upload/linux/ 2>/dev/null || true
-          cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/tar.gz/*.tar.gz ./release-upload/linux/ 2>/dev/null || true
-          cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/*.deb ./release-upload/linux/ 2>/dev/null || true
-          cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage/*.AppImage ./release-upload/linux/ 2>/dev/null || true
-          cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/rpm/*.rpm ./release-upload/linux/ 2>/dev/null || true
-          cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/tar.gz/*.tar.gz ./release-upload/linux/ 2>/dev/null || true
-          ls -la ./release-upload/linux/
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            cp src-tauri/target/${target}/release/bundle/deb/*.deb ./release-upload/linux/ 2>/dev/null || true
+            cp src-tauri/target/${target}/release/bundle/appimage/*.AppImage ./release-upload/linux/ 2>/dev/null || true
+            cp src-tauri/target/${target}/release/bundle/rpm/*.rpm ./release-upload/linux/ 2>/dev/null || true
+            cp src-tauri/target/${target}/release/bundle/tar.gz/*.tar.gz ./release-upload/linux/ 2>/dev/null || true
+          done
 
-      - name: Upload Linux artifacts
+      - name: 上传 Linux 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: linux-all
           path: ./release-upload/linux/*
           retention-days: 1
 
-  # ==================== Windows (x64 + x86 + ARM64) ====================
+  # Windows 构建任务
   build-windows:
-    if: ${{ github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
+    needs: prepare
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
     runs-on: windows-latest
     steps:
-      - name: Checkout Private Repository
+      - name: 拉取私有仓库代码
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
@@ -307,75 +332,84 @@ jobs:
           node-version: 22
           cache: "pnpm"
           
-      - name: Install dependencies
+      - name: 安装依赖
         run: pnpm install
 
-      - name: Install Rust
+      - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc
 
-      # Build x64
-      - name: Build Tauri (x64)
+      - name: 构建 x64 版本
         run: pnpm run tauri build --target x86_64-pc-windows-msvc
 
-      # Build x86
-      - name: Build Tauri (x86)
+      - name: 构建 x86 版本
         run: pnpm run tauri build --target i686-pc-windows-msvc
 
-      # Build ARM64
-      - name: Build Tauri (ARM64)
+      - name: 构建 ARM64 版本
         run: pnpm run tauri build --target aarch64-pc-windows-msvc
 
-      # 打包 Windows 产物
-      - name: Package Windows artifacts
+      - name: 打包 Windows 产物
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
-          Copy-Item -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Copy-Item -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Copy-Item -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/zip/*.zip" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Copy-Item -Path "src-tauri/target/i686-pc-windows-msvc/release/bundle/msi/*.msi" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Copy-Item -Path "src-tauri/target/i686-pc-windows-msvc/release/bundle/nsis/*.exe" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Copy-Item -Path "src-tauri/target/i686-pc-windows-msvc/release/bundle/zip/*.zip" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Copy-Item -Path "src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Copy-Item -Path "src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Copy-Item -Path "src-tauri/target/aarch64-pc-windows-msvc/release/bundle/zip/*.zip" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
-          Get-ChildItem ./release-upload/windows/
+          foreach ($target in @("x86_64-pc-windows-msvc", "i686-pc-windows-msvc", "aarch64-pc-windows-msvc")) {
+            foreach ($type in @("msi", "nsis", "zip")) {
+              $ext = if ($type -eq "msi") { "msi" } elseif ($type -eq "nsis") { "exe" } else { "zip" }
+              Copy-Item -Path "src-tauri/target/$target/release/bundle/$type/*.$ext" -Destination "./release-upload/windows/" -ErrorAction SilentlyContinue
+            }
+          }
 
-      - name: Upload Windows artifacts
+      - name: 上传 Windows 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: windows-all
           path: ./release-upload/windows/*
           retention-days: 1
 
-  # ==================== 发布 Release（收集所有产物） ====================
+  # 发布阶段：创建/更新 Release
   release:
-    needs: [build-macos, build-linux, build-windows]
+    needs: [prepare, build-macos, build-linux, build-windows]
     if: |
       always() && 
       (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped') &&
       (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') &&
-      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped') &&
-      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event.inputs.create_release == true)
+      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
+      - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
           merge-multiple: true
 
-      - name: List artifacts
+      - name: 查看产物列表
         run: |
-          echo "Downloaded artifacts:"
+          echo "构建产物:"
           find ./artifacts -type f -ls
 
-      - name: Create Release
+      # 如果勾选了强制更新，先删除已存在的 Release
+      - name: 删除已存在的 Release（强制更新时）
+        if: ${{ inputs.force_recreate == true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          gh release delete "$VERSION" --yes 2>/dev/null || echo "Release $VERSION 不存在，无需删除"
+          # 同时删除标签，避免冲突
+          git push origin :refs/tags/$VERSION 2>/dev/null || echo "标签 $VERSION 不存在，无需删除"
+
+      # 创建或更新 Release
+      - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: ${{ needs.prepare.outputs.title }}
+          body: |
+            ${{ needs.prepare.outputs.notes }}
+            
+            工作流编号: ${{ github.run_id }}
           files: ./artifacts/**/*
           draft: false
-          prerelease: false
-          generate_release_notes: true
+          prerelease: ${{ contains(needs.prepare.outputs.version, 'beta') || contains(needs.prepare.outputs.version, 'alpha') || contains(needs.prepare.outputs.version, 'rc') }}
+          generate_release_notes: false
