@@ -199,17 +199,18 @@ jobs:
       - name: 构建 x64 版本
         run: pnpm run tauri build --target x86_64-unknown-linux-gnu
 
-      # ========== 核心新增：安装 QEMU 模拟器（支持 ARM64 可执行文件运行） ==========
-      - name: 安装 QEMU 及二进制格式支持
+      # ========== 安装 QEMU 模拟器（支持 ARM64 可执行文件运行） ==========
+      - name: 安装 QEMU 及二进制格式支持（修正命令错误）
         run: |
           sudo apt-get update
           # 安装 QEMU 模拟器和二进制格式配置工具
           sudo apt-get install -y qemu-user-static binfmt-support
-          # 注册 ARM64 二进制文件的自动模拟（关键：让系统识别 ARM64 可执行文件）
-          sudo update-binfmts --enable qemu-aarch64
-          # 验证 QEMU 配置是否生效
-          qemu-aarch64 --version
-          update-binfmts --display | grep aarch64
+          # 强制重新配置 binfmt，确保 ARM64 模拟生效（忽略"已启用"警告）
+          sudo update-binfmts --package qemu-user-static --install qemu-aarch64 /usr/bin/qemu-aarch64-static --magic '\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00' --mask '\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+          # 验证 binfmt 配置是否生效（核心验证，替代版本检查）
+          update-binfmts --display | grep -E 'aarch64|qemu'
+          # 可选：验证 qemu-aarch64-static 文件是否存在
+          ls -la /usr/bin/qemu-aarch64-static
 
       # ARM64 交叉编译 - 修正依赖安装
       - name: 配置 ARM64 交叉编译环境
