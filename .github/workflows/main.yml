@@ -362,28 +362,28 @@ jobs:
   
       - name: 配置 ARM64 交叉编译环境
         run: |
-          # 添加 ARM64 架构支持
+          # 1. 添加 ARM64 架构支持（先清理可能的错误配置）
           sudo dpkg --add-architecture arm64
-          # 备份并修改源列表，同时支持 amd64 和 arm64
-          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
-          sudo tee -a /etc/apt/sources.list <<EOF
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
-          EOF
-          # 更新源并安装必要工具（移除不存在的 pkg-config-aarch64-linux-gnu）
+          sudo apt-get clean
           sudo apt-get update -y
+          
+          # 2. 安装基础交叉编译工具（分开安装，避免格式错误）
           sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            libc6-dev-arm64-cross patchelf pkg-config \
-            # ARM64 版本的核心依赖库
-            libglib2.0-dev:arm64 \
-            libgtk-3-dev:arm64 \
-            libsoup-3.0-dev:arm64 \
-            libwebkit2gtk-4.1-dev:arm64 \
-            libayatana-appindicator3-dev:arm64 \
-            librsvg2-dev:arm64 \
-            libssl-dev:arm64
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            patchelf \
+            pkg-config
+          
+          # 3. 单独安装 ARM64 架构的依赖库（用引号包裹，避免解析错误）
+          sudo apt-get install -y --no-install-recommends \
+            "libglib2.0-dev:arm64" \
+            "libgtk-3-dev:arm64" \
+            "libsoup-3.0-dev:arm64" \
+            "libwebkit2gtk-4.1-dev:arm64" \
+            "libayatana-appindicator3-dev:arm64" \
+            "librsvg2-dev:arm64" \
+            "libssl-dev:arm64"
   
       - name: 配置 Cargo + PKG_CONFIG 跨编译
         run: |
@@ -394,15 +394,20 @@ jobs:
           linker = "aarch64-linux-gnu-gcc"
           EOF
   
-          # 配置 pkg-config 环境变量
+          # 配置 pkg-config 环境变量（关键修复）
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
           echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
           echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
   
       - name: 允许构建所有包（deb + AppImage）
         run: |
-          # 确保 tauri.conf.json 中 targets 包含 deb 和 appimage
-          sed -i 's/"targets":.*$/\"targets\": [\"deb\", \"appimage\"]/' src-tauri/tauri.conf.json 2>/dev/null || true
+          # 确保 tauri.conf.json 中 targets 包含 deb 和 appimage（容错处理）
+          if grep -q '"targets"' src-tauri/tauri.conf.json; then
+            sed -i 's/"targets":.*$/\"targets\": [\"deb\", \"appimage\"]/' src-tauri/tauri.conf.json
+          else
+            # 如果没有 targets 配置，手动添加（仅做容错）
+            echo "tauri.conf.json 未找到 targets 配置，使用默认值"
+          fi
   
       - name: 编译 ARM64
         run: pnpm run tauri build --target aarch64-unknown-linux-gnu
@@ -417,10 +422,14 @@ jobs:
       - name: 收集 deb + AppImage
         run: |
           mkdir -p ./release-upload/linux-arm64
-          # 收集 deb 包
-          cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/* ./release-upload/linux-arm64/ 2>/dev/null || true
-          # 收集 AppImage 包
-          cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage/* ./release-upload/linux-arm64/ 2>/dev/null || true
+          # 收集 deb 包（容错）
+          if ls src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/* 1> /dev/null 2>&1; then
+            cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/deb/* ./release-upload/linux-arm64/
+          fi
+          # 收集 AppImage 包（容错）
+          if ls src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage/* 1> /dev/null 2>&1; then
+            cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage/* ./release-upload/linux-arm64/
+          fi
   
       - name: 上传 ARM64 产物
         uses: actions/upload-artifact@v4
