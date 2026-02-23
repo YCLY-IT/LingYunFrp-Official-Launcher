@@ -107,129 +107,129 @@ jobs:
             [ -z "$CHANGES" ] && CHANGES=$(git log -10 --pretty=format:"- %s" --no-merges)
             
             # 套你的完整模板
-            NOTES="## 🚀 首个正式版本发布
-
-凌云FRP图形化客户端 ${VERSION} 正式发布！这是一个基于 Tauri + Vue3 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。
-
-### ✨ 主要功能
-
-- **图形化配置管理** - 直观易用的界面，轻松管理 FRP 配置
-- **一键启停服务** - 快速启动和停止 FRP 服务
-- **实时日志查看** - 内置日志面板，实时显示运行状态
-- **系统托盘支持** - 最小化到托盘，快捷操作不打扰
-- **自动更新检测** - 自动检查新版本，及时获取更新
-- **多主题切换** - 支持明暗主题，适配不同使用场景
-- **跨平台支持** - 支持 Windows、macOS、Linux 三大平台
-
-### 📦 下载安装
-
-| 平台 | 架构 | 安装包 |
-|------|------|--------|
-| Windows | x64 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
-| Windows | x86 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
-| Windows | ARM64 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
-| macOS | x64 | \`.dmg\` / \`.app.tar.gz\` |
-| macOS | ARM64 (M1/M2) | \`.dmg\` / \`.app.tar.gz\` |
-| macOS | Universal | \`.dmg\` / \`.app.tar.gz\` |
-| Linux | x64 | \`.deb\` / \`.AppImage\` / \`.rpm\` / \`.tar.gz\` |
-| Linux | ARM64 | \`.deb\` / \`.AppImage\` / \`.rpm\` / \`.tar.gz\` |
-
-### 🔧 系统要求
-
-- **Windows**: Windows 10 及以上（64位）
-- **macOS**: macOS 11 (Big Sur) 及以上（Intel/Apple Silicon）
-- **Linux**: Ubuntu 20.04+ / Debian 11+ / Fedora 35+ / Arch Linux
-
-### 📝 安装指南
-
-#### Windows
-1. 下载 \`.msi\` 安装包（推荐）或 \`.exe\` 安装程序
-2. 双击运行安装程序，按向导完成安装
-3. 从开始菜单或桌面快捷方式启动应用
-
-#### macOS
-1. 下载 \`.dmg\` 文件
-2. 双击打开，将应用拖拽到 Applications 文件夹
-3. 首次启动请参考下方\"注意事项\"
-
-#### Linux
-**Debian/Ubuntu (.deb):**
-\`\`\`bash
-sudo dpkg -i 凌云FRP_${VERSION}_amd64.deb
-sudo apt-get install -f  # 修复依赖
-\`\`\`
-
-**Fedora/openSUSE (.rpm):**
-\`\`\`bash
-sudo rpm -i 凌云FRP-${VERSION}-1.x86_64.rpm
-\`\`\`
-
-**AppImage:**
-\`\`\`bash
-chmod +x 凌云FRP_${VERSION}_amd64.AppImage
-./凌云FRP_${VERSION}_amd64.AppImage
-\`\`\`
-
-**Arch Linux (tar.gz):**
-\`\`\`bash
-tar -xzf 凌云FRP_${VERSION}_amd64.tar.gz
-cd 凌云FRP
-./凌云FRP
-\`\`\`
-
-### ⚠️ 注意事项
-
-#### Windows
-- **SmartScreen 提示**：首次安装时，Windows Defender SmartScreen 可能会提示\"Windows 已保护你的电脑\"，点击\"更多信息\" → \"仍要运行\"即可。这是因为应用尚未建立信誉度，并非安全问题。
-- **安装权限**：安装 \`.msi\` 版本时，若提示\"来自未知发布者\"，请点击\"更多信息\" → \"仍要运行\"。
-- **杀毒软件**：部分杀毒软件可能会误报，请将应用添加到白名单。
-
-#### macOS
-- **Gatekeeper 提示**：首次打开应用时，系统会提示\"无法打开'凌云FRP'，因为无法验证开发者\"，请前往 **系统设置 → 隐私与安全性** → 安全性 → 点击\"仍要打开\"。
-- **Apple Silicon**：ARM64 版本原生支持 Apple Silicon (M1/M2/M3)，Universal 版本同时支持 Intel 和 Apple Silicon。
-- **辅助功能**：应用可能需要请求\"辅助功能\"权限以实现全局快捷键，可在 **系统设置 → 隐私与安全性 → 辅助功能** 中授权。
-
-#### Linux
-- **依赖库**：使用 \`.deb\` 或 \`.rpm\` 安装包可自动处理依赖关系。若手动安装，请确保已安装以下依赖：
-  - \`libwebkit2gtk-4.1-0\` 或 \`webkit2gtk4.1\`
-  - \`libgtk-3-0\`
-  - \`libappindicator3-1\`（系统托盘支持）
-- **AppImage 权限**：AppImage 版本需要赋予执行权限：\`chmod +x 凌云FRP_*.AppImage\`
-- **Wayland 兼容性**：在 Wayland 会话下，部分功能可能需要额外配置，建议使用 X11 或等待后续更新。
-
-#### 通用
-- **文件存储**：文件默认存储在系统标准配置目录：
-  - Windows: \`%APPDATA%\\cn.lyfrp.client\`
-  - macOS: \`~/Library/Application Support/cn.lyfrp.client\`
-  - Linux: \`~/.config/cn.lyfrp.client\`
-
-### 🐛 已知问题
-
-- Windows 11 部分版本可能存在窗口阴影渲染问题
-- Linux Wayland 下系统托盘图标可能无法正常显示
-- 首次启动时加载可能需要几秒钟，请耐心等待
-
-### 🔄 更新日志
-
-**${VERSION} (${BUILD_DATE})**
-${CHANGES}
-
-### 📋 反馈与支持
-
-- 🌐 官网：https://www.lyfrp.cn 
-- 📖 文档：https://docs.lyfrp.cn 
-- 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues 
-- 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/wiki 
-- 📧 邮箱：1263115878@qq.com
-- 💬 QQ群：882670857
-
-### 📜 开源协议
-
-本项目基于 [AGPL-3.0 License](LICENSE) 开源。
-
----
-
-**感谢使用凌云FRP！如有任何问题或建议，欢迎反馈。**"
+            cat > /tmp/notes.txt << 'NOTES_EOF'
+          凌云FRP图形化客户端 ${VERSION} 正式发布！这是一个基于 Tauri + Vue3 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。
+          
+          ### ✨ 主要功能
+          
+          - **图形化配置管理** - 直观易用的界面，轻松管理 FRP 配置
+          - **一键启停服务** - 快速启动和停止 FRP 服务
+          - **实时日志查看** - 内置日志面板，实时显示运行状态
+          - **系统托盘支持** - 最小化到托盘，快捷操作不打扰
+          - **自动更新检测** - 自动检查新版本，及时获取更新
+          - **多主题切换** - 支持明暗主题，适配不同使用场景
+          - **跨平台支持** - 支持 Windows、macOS、Linux 三大平台
+          
+          ### 📦 下载安装
+          
+          | 平台 | 架构 | 安装包 |
+          |------|------|--------|
+          | Windows | x64 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
+          | Windows | x86 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
+          | Windows | ARM64 | \`.msi\` / \`.exe\` (NSIS) / \`.zip\` |
+          | macOS | x64 | \`.dmg\` / \`.app.tar.gz\` |
+          | macOS | ARM64 (M1/M2) | \`.dmg\` / \`.app.tar.gz\` |
+          | macOS | Universal | \`.dmg\` / \`.app.tar.gz\` |
+          | Linux | x64 | \`.deb\` / \`.AppImage\` / \`.rpm\` / \`.tar.gz\` |
+          | Linux | ARM64 | \`.deb\` / \`.AppImage\` / \`.rpm\` / \`.tar.gz\` |
+          
+          ### 🔧 系统要求
+          
+          - **Windows**: Windows 10 及以上（64位）
+          - **macOS**: macOS 11 (Big Sur) 及以上（Intel/Apple Silicon）
+          - **Linux**: Ubuntu 20.04+ / Debian 11+ / Fedora 35+ / Arch Linux
+          
+          ### 📝 安装指南
+          
+          #### Windows
+          1. 下载 \`.msi\` 安装包（推荐）或 \`.exe\` 安装程序
+          2. 双击运行安装程序，按向导完成安装
+          3. 从开始菜单或桌面快捷方式启动应用
+          
+          #### macOS
+          1. 下载 \`.dmg\` 文件
+          2. 双击打开，将应用拖拽到 Applications 文件夹
+          3. 首次启动请参考下方\"注意事项\"
+          
+          #### Linux
+          **Debian/Ubuntu (.deb):**
+          \`\`\`bash
+          sudo dpkg -i 凌云FRP_${VERSION}_amd64.deb
+          sudo apt-get install -f  # 修复依赖
+          \`\`\`
+          
+          **Fedora/openSUSE (.rpm):**
+          \`\`\`bash
+          sudo rpm -i 凌云FRP-${VERSION}-1.x86_64.rpm
+          \`\`\`
+          
+          **AppImage:**
+          \`\`\`bash
+          chmod +x 凌云FRP_${VERSION}_amd64.AppImage
+          ./凌云FRP_${VERSION}_amd64.AppImage
+          \`\`\`
+          
+          **Arch Linux (tar.gz):**
+          \`\`\`bash
+          tar -xzf 凌云FRP_${VERSION}_amd64.tar.gz
+          cd 凌云FRP
+          ./凌云FRP
+          \`\`\`
+          
+          ### ⚠️ 注意事项
+          
+          #### Windows
+          - **SmartScreen 提示**：首次安装时，Windows Defender SmartScreen 可能会提示\"Windows 已保护你的电脑\"，点击\"更多信息\" → \"仍要运行\"即可。这是因为应用尚未建立信誉度，并非安全问题。
+          - **安装权限**：安装 \`.msi\` 版本时，若提示\"来自未知发布者\"，请点击\"更多信息\" → \"仍要运行\"。
+          - **杀毒软件**：部分杀毒软件可能会误报，请将应用添加到白名单。
+          
+          #### macOS
+          - **Gatekeeper 提示**：首次打开应用时，系统会提示\"无法打开'凌云FRP'，因为无法验证开发者\"，请前往 **系统设置 → 隐私与安全性** → 安全性 → 点击\"仍要打开\"。
+          - **Apple Silicon**：ARM64 版本原生支持 Apple Silicon (M1/M2/M3)，Universal 版本同时支持 Intel 和 Apple Silicon。
+          - **辅助功能**：应用可能需要请求\"辅助功能\"权限以实现全局快捷键，可在 **系统设置 → 隐私与安全性 → 辅助功能** 中授权。
+          
+          #### Linux
+          - **依赖库**：使用 \`.deb\` 或 \`.rpm\` 安装包可自动处理依赖关系。若手动安装，请确保已安装以下依赖：
+            - \`libwebkit2gtk-4.1-0\` 或 \`webkit2gtk4.1\`
+            - \`libgtk-3-0\`
+            - \`libappindicator3-1\`（系统托盘支持）
+          - **AppImage 权限**：AppImage 版本需要赋予执行权限：\`chmod +x 凌云FRP_*.AppImage\`
+          - **Wayland 兼容性**：在 Wayland 会话下，部分功能可能需要额外配置，建议使用 X11 或等待后续更新。
+          
+          #### 通用
+          - **文件存储**：文件默认存储在系统标准配置目录：
+            - Windows: \`%APPDATA%\\cn.lyfrp.client\`
+            - macOS: \`~/Library/Application Support/cn.lyfrp.client\`
+            - Linux: \`~/.config/cn.lyfrp.client\`
+          
+          ### 🐛 已知问题
+          
+          - Windows 11 部分版本可能存在窗口阴影渲染问题
+          - Linux Wayland 下系统托盘图标可能无法正常显示
+          - 首次启动时加载可能需要几秒钟，请耐心等待
+          
+          ### 🔄 更新日志
+          
+          **${VERSION} (${BUILD_DATE})**
+          ${CHANGES}
+          
+          ### 📋 反馈与支持
+          
+          - 🌐 官网：https://www.lyfrp.cn 
+          - 📖 文档：https://docs.lyfrp.cn 
+          - 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues 
+          - 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/wiki 
+          - 📧 邮箱：1263115878@qq.com
+          - 💬 QQ群：882670857
+          
+          ### 📜 开源协议
+          
+          本项目基于 [AGPL-3.0 License](LICENSE) 开源。
+          
+          ---
+          
+          **感谢使用凌云FRP！如有任何问题或建议，欢迎反馈。**
+          NOTES_EOF
             
           elif [ -n "${{ inputs.release_notes }}" ]; then
             NOTES="${{ inputs.release_notes }}"
