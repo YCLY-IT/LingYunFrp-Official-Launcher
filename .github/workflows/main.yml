@@ -320,7 +320,7 @@ jobs:
   build-linux-arm64:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
-    runs-on: ubuntu-24.04-arm64
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: 拉代码
         uses: actions/checkout@v4
