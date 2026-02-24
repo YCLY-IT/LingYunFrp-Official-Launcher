@@ -108,7 +108,7 @@ jobs:
             
             # 模板写文件，用占位符
             cat > /tmp/template.txt << 'EOF'
-          凌云FRP图形化客户端 {{VERSION}} 正式发布！这是一个基于 Tauri + Vue3 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。
+          LingYunFrp {{VERSION}} 正式发布！这是一个基于 Tauri + Vue3 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。
           
           ### ✨ 主要功能
           
@@ -143,7 +143,7 @@ jobs:
           
           **Debian/Ubuntu:**
           ```bash
-          sudo dpkg -i 凌云FRP_{{VERSION}}_amd64.deb
+          sudo dpkg -i LingYunFrp_{{VERSION}}_amd64.deb
           sudo apt-get install -f
           ```
           
@@ -162,13 +162,13 @@ jobs:
           
           ### 📋 反馈与支持
           
-          - 🌐 官网：https://www.lyfrp.cn
-          - 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues
-          - 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/discussions
+          - 🌐 官网：https://www.lyfrp.cn 
+          - 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues 
+          - 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/discussions 
           - 📧 邮箱：1263115878@qq.com
           - 💬 QQ群：882670857
           
-          **感谢使用凌云FRP！**
+          **感谢使用 LingYunFrp！**
           EOF
 
             # 替换占位符
@@ -301,6 +301,11 @@ jobs:
             libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
             xdg-utils
 
+      - name: 修改 productName 加入架构标识
+        run: |
+          sudo apt-get install -y jq
+          jq '.productName = "LingYunFrp-x64"' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+
       - name: 编 x64
         run: pnpm run tauri build --target x86_64-unknown-linux-gnu
 
@@ -370,6 +375,11 @@ jobs:
             libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
             xdg-utils
 
+      - name: 修改 productName 加入架构标识
+        run: |
+          sudo apt-get install -y jq
+          jq '.productName = "LingYunFrp-arm64"' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+
       - name: 编 ARM64
         run: pnpm run tauri build --target aarch64-unknown-linux-gnu
 
@@ -389,37 +399,55 @@ jobs:
           
   merge-linux:
     needs: [build-linux-x64, build-linux-arm64]
-    if: ${{ always() }}  # 即使某个架构编译失败，仍执行合并
+    if: ${{ always() && (needs.build-linux-x64.result == 'success' || needs.build-linux-arm64.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - name: 创建产物目录
         run: mkdir -p ./release-upload/linux
   
-      - name: 下载 x64 产物（容错：不存在则跳过）
-        uses: actions/download-artifact@v4
+      - name: 下载 x64 产物
         if: ${{ needs.build-linux-x64.result == 'success' }}
+        uses: actions/download-artifact@v4
         with:
           name: linux-x64
           path: ./release-upload/linux
-      
-      - name: 下载 ARM64 产物（容错：不存在则跳过）
-        uses: actions/download-artifact@v4
+  
+      - name: 下载 ARM64 产物
         if: ${{ needs.build-linux-arm64.result == 'success' }}
+        uses: actions/download-artifact@v4
         with:
           name: linux-arm64
           path: ./release-upload/linux
   
-      - name: 传合并产物（即使为空也上传，避免后续报错）
+      - name: 列出产物
+        run: ls -la ./release-upload/linux/
+
+      - name: 传合并产物
         uses: actions/upload-artifact@v4
         with:
           name: linux-all
           path: ./release-upload/linux/*
           retention-days: 1
+          if-no-files-found: warn
 
   build-windows:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+            product_name: "LingYunFrp-x64"
+          - target: i686-pc-windows-msvc
+            arch: x86
+            product_name: "LingYunFrp-x86"
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+            product_name: "LingYunFrp-arm64"
+    
     steps:
       - name: 拉代码
         uses: actions/checkout@v4
@@ -430,7 +458,7 @@ jobs:
       - name: 缓存 Rust
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ needs.prepare.outputs.cache-key }}-windows
+          key: ${{ needs.prepare.outputs.cache-key }}-windows-${{ matrix.arch }}
       
       - uses: pnpm/action-setup@v2
         with:
@@ -448,8 +476,8 @@ jobs:
             src-tauri/target
             ~/.cargo/registry
             ~/.cargo/git
-          key: tauri-windows-${{ needs.prepare.outputs.cache-key }}
-          restore-keys: tauri-windows-
+          key: tauri-windows-${{ matrix.arch }}-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: tauri-windows-${{ matrix.arch }}-
       
       - name: 装依赖
         run: pnpm install
@@ -457,44 +485,83 @@ jobs:
       - name: 装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc
+          targets: ${{ matrix.target }}
   
-      - name: 串行编译 Windows 各架构（稳定优先）
+      - name: 修改 productName
         shell: pwsh
         run: |
-          # 串行编译，避免资源冲突
-          Write-Host "编译 x64 架构..."
-          pnpm run tauri build --target x86_64-pc-windows-msvc
-          
-          Write-Host "编译 x86 架构..."
-          pnpm run tauri build --target i686-pc-windows-msvc
-          
-          Write-Host "编译 ARM64 架构..."
-          pnpm run tauri build --target aarch64-pc-windows-msvc
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $config.productName = "${{ matrix.product_name }}"
+          $config | ConvertTo-Json -Depth 10 | Set-Content src-tauri/tauri.conf.json
+          Write-Host "Set productName to: ${{ matrix.product_name }}"
+
+      - name: 编译 ${{ matrix.arch }} 架构
+        run: pnpm run tauri build --target ${{ matrix.target }}
   
       - name: 收包
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
-          # 收集所有 Windows 产物（容错）
-          Get-ChildItem "src-tauri/target/" -Recurse -Include *.msi,*.exe,*.zip | 
-            Where-Object { $_.FullName -match "x86_64|i686|aarch64" } |
-            Copy-Item -Destination ./release-upload/windows/ -ErrorAction SilentlyContinue
-  
+          $bundleDir = "src-tauri/target/${{ matrix.target }}/release/bundle"
+          
+          Get-ChildItem $bundleDir -Recurse -File | 
+            Where-Object { $_.Extension -match '\.(msi|exe|zip|nsis)$' } |
+            ForEach-Object {
+              Copy-Item $_.FullName ./release-upload/windows/ -Force
+              Write-Host "Collected: $($_.Name)"
+            }
+
       - name: 传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: ./release-upload/windows/*
+          retention-days: 1
+
+  merge-windows:
+    needs: build-windows
+    if: ${{ always() && needs.build-windows.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 创建产物目录
+        run: mkdir -p ./release-upload/windows
+
+      - name: 下载 x64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: ./release-upload/windows
+
+      - name: 下载 x86 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x86
+          path: ./release-upload/windows
+
+      - name: 下载 arm64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-arm64
+          path: ./release-upload/windows
+
+      - name: 列出产物
+        run: ls -la ./release-upload/windows/
+
+      - name: 传合并产物
         uses: actions/upload-artifact@v4
         with:
           name: windows-all
           path: ./release-upload/windows/*
           retention-days: 1
+          if-no-files-found: warn
           
   release:
-    needs: [prepare, build-macos, merge-linux, build-windows]
+    needs: [prepare, build-macos, merge-linux, merge-windows]
     if: |
       always() && 
       (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped') &&
       (needs.merge-linux.result == 'success' || needs.merge-linux.result == 'skipped') &&
-      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped')
+      (needs.merge-windows.result == 'success' || needs.merge-windows.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: 下载产物
@@ -503,14 +570,21 @@ jobs:
           path: ./artifacts
           merge-multiple: true
 
+      - name: 检查产物
+        run: |
+          echo "Artifacts downloaded:"
+          find ./artifacts -type f -name "*" | head -20
+
       - name: 删旧 Release
         if: ${{ inputs.force_recreate == true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
-          gh release delete "$VERSION" --yes 2>/dev/null || true
-          git push origin :refs/tags/$VERSION 2>/dev/null || true
+          echo "Deleting release $VERSION if exists..."
+          gh release delete "$VERSION" --yes 2>/dev/null || echo "Release not found"
+          git push origin :refs/tags/$VERSION 2>/dev/null || echo "Tag not found"
+          sleep 5
 
       - name: 发 Release
         uses: softprops/action-gh-release@v2
@@ -519,6 +593,7 @@ jobs:
           name: ${{ needs.prepare.outputs.title }}
           body: ${{ needs.prepare.outputs.notes }}
           files: ./artifacts/**/*
+          fail_on_unmatched_files: false
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, 'beta') || contains(needs.prepare.outputs.version, 'alpha') || contains(needs.prepare.outputs.version, 'rc') }}
           generate_release_notes: false
