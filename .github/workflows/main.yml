@@ -320,83 +320,105 @@ jobs:
   build-linux-arm64:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
-    runs-on: ubuntu-22.04  # 改用22.04避免24.04的依赖冲突
+    runs-on: ubuntu-22.04
     steps:
       - name: 拉代码
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
-  
-      - name: 安装 QEMU 核心组件（仅需模拟，无需Docker）
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: 安装交叉编译工具链
         run: |
-          # 仅安装QEMU模拟组件，不装docker.io，避开依赖冲突
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            qemu-user-static \
-            binfmt-support \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            libc6-dev-arm64-cross
-  
-          # 注册ARM64架构支持（核心：让系统能运行ARM64二进制）
-          sudo update-binfmts --enable qemu-aarch64
-  
-      - name: 安装 ARM64 版本的依赖库（原生路径）
-        run: |
-          # 添加ARM64架构
-          sudo dpkg --add-architecture arm64
-          # 配置ARM64源（仅用ports.ubuntu.com，避免404）
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          sudo apt-get update -y || true
-  
-          # 安装ARM64版本的Tauri核心依赖（无冲突）
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev:arm64 \
-            libwebkit2gtk-4.1-dev:arm64 \
-            libayatana-appindicator3-dev:arm64 \
-            librsvg2-dev:arm64 \
-            libssl-dev:arm64 \
-            pkg-config
-  
-      - name: 配置 Cargo 编译环境
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: 配置 Cargo 交叉编译环境
         run: |
           mkdir -p ~/.cargo
-          cat > ~/.cargo/config.toml <<EOF
+          cat > ~/.cargo/config.toml << 'EOF'
           [target.aarch64-unknown-linux-gnu]
           linker = "aarch64-linux-gnu-gcc"
-          # 强制使用ARM64依赖库
-          rustflags = [
-            "-L/usr/lib/aarch64-linux-gnu",
-            "-L/usr/aarch64-linux-gnu/lib"
-          ]
           EOF
-  
-          # 配置pkg-config指向ARM64库
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-          echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
-          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
-  
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
       - name: 安装项目依赖
         run: pnpm install
-  
-      - name: 编译 ARM64（QEMU 模拟执行）
+
+      - name: 使用 Docker 编译 ARM64
         run: |
-          # 导出环境变量，确保编译指向ARM64
-          export CC=aarch64-linux-gnu-gcc
-          export CXX=aarch64-linux-gnu-g++
-          export PKG_CONFIG_ALLOW_CROSS=1
-          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-          
-          # 执行编译（QEMU自动模拟ARM64）
-          pnpm run tauri build --target aarch64-unknown-linux-gnu || true
-  
+          # 创建 Dockerfile
+          cat > Dockerfile.arm64 << 'DOCKEREOF'
+          FROM ubuntu:22.04
+
+          ENV DEBIAN_FRONTEND=noninteractive
+
+          RUN apt-get update && apt-get install -y \
+              curl \
+              ca-certificates \
+              gnupg \
+              lsb-release \
+              build-essential \
+              pkg-config \
+              libgtk-3-dev \
+              libwebkit2gtk-4.1-dev \
+              libayatana-appindicator3-dev \
+              librsvg2-dev \
+              libssl-dev \
+              && rm -rf /var/lib/apt/lists/*
+
+          # 安装 Node.js
+          RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+              && apt-get install -y nodejs
+
+          # 安装 Rust
+          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          ENV PATH="/root/.cargo/bin:${PATH}"
+          RUN rustup target add aarch64-unknown-linux-gnu
+
+          # 安装 pnpm
+            RUN npm install -g pnpm@10
+
+          WORKDIR /app
+          DOCKEREOF
+
+          # 构建 Docker 镜像
+          docker build -f Dockerfile.arm64 -t tauri-arm64-builder .
+
+          # 在容器中编译
+          docker run --rm \
+            -v "$(pwd):/app" \
+            -e CARGO_HOME=/app/.cargo-cache \
+            tauri-arm64-builder \
+            bash -c "pnpm install && pnpm run tauri build --target aarch64-unknown-linux-gnu"
+
       - name: 收集产物
         run: |
           mkdir -p ./release-upload/linux-arm64
-          # 收集所有ARM64产物（deb/appimage）
           find src-tauri/target -name "*.deb" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
           find src-tauri/target -name "*.AppImage" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
+          find src-tauri/target -name "*.rpm" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
+          find src-tauri/target -name "*.tar.gz" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: ./release-upload/linux-arm64/*
+          retention-days: 1
           # 验证产物
           ls -la ./release-upload/linux-arm64/ || true
   
