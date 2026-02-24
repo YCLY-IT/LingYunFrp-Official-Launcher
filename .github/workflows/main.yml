@@ -402,8 +402,10 @@ jobs:
           docker run --rm \
             -v "$(pwd):/app" \
             -e CARGO_HOME=/app/.cargo-cache \
+            -e CI=true \
+            -e PNPM_IGNORE_PACKAGE_MANAGER_VERSION=true \
             tauri-arm64-builder \
-            bash -c "pnpm install && pnpm run tauri build --target aarch64-unknown-linux-gnu"
+            bash -c "pnpm install --frozen-lockfile && pnpm run tauri build --target aarch64-unknown-linux-gnu"
 
       - name: 收集产物
         run: |
