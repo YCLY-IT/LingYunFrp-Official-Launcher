@@ -362,10 +362,10 @@ jobs:
   
       - name: 配置 ARM64 交叉编译环境
         run: |
-          # 备份原有源列表
+          # 备份源列表
           sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
           
-          # 重新配置源（仅保留必要的 amd64 + arm64 源）
+          # 配置源
           sudo tee /etc/apt/sources.list > /dev/null <<EOF
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
@@ -375,84 +375,72 @@ jobs:
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
           EOF
           
-          # 添加 ARM64 架构并更新源
+          # 添加 ARM64 架构并更新
           sudo dpkg --add-architecture arm64
           sudo apt-get update -y
           
-          # 安装基础工具和 jq（用于安全编辑 JSON）
+          # 安装基础工具（移除 libayatana-appindicator3-dev:arm64，避免路径冲突）
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross \
             patchelf \
             pkg-config \
-            jq
-          
-          # 安装 ARM64 依赖库
-          sudo apt-get install -y --no-install-recommends \
+            jq \
+            # 核心依赖（去掉 appindicator）
             "libglib2.0-dev:arm64" \
             "libgtk-3-dev:arm64" \
             "libsoup-3.0-dev:arm64" \
             "libwebkit2gtk-4.1-dev:arm64" \
-            "libayatana-appindicator3-dev:arm64" \
             "librsvg2-dev:arm64" \
             "libssl-dev:arm64"
+          
+          # 修复库路径：创建软链接，解决路径重复问题
+          sudo mkdir -p /usr/aarch64-linux-gnu/usr/lib/aarch64-linux-gnu/
+          sudo ln -s /usr/aarch64-linux-gnu/lib/ /usr/aarch64-linux-gnu/usr/lib/aarch64-linux-gnu/ 2>/dev/null || true
   
       - name: 配置 Cargo + PKG_CONFIG 跨编译
         run: |
-          # 配置 Cargo 交叉编译
           mkdir -p ~/.cargo
           cat > ~/.cargo/config.toml <<EOF
           [target.aarch64-unknown-linux-gnu]
           linker = "aarch64-linux-gnu-gcc"
           EOF
   
-          # 配置 pkg-config 环境变量
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
           echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
           echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
+          # 跳过 appindicator 相关检查
+          echo "TAURI_SKIP_APPINDICATOR=1" >> $GITHUB_ENV
   
-      - name: 验证并修复 tauri.conf.json 格式（关键）
+      - name: 修复 tauri.conf.json 并配置打包
         run: |
-          # 1. 先验证 JSON 格式是否合法
+          # 验证并修复 JSON 格式
           if ! jq . src-tauri/tauri.conf.json; then
-            echo "发现 tauri.conf.json 格式错误，尝试自动修复基础问题..."
-            # 修复常见的 JSON 错误：末尾多余逗号
             sed -i 's/,\s*}/}/g' src-tauri/tauri.conf.json
             sed -i 's/,\s*]/]/g' src-tauri/tauri.conf.json
-            # 再次验证
-            jq . src-tauri/tauri.conf.json || echo "自动修复失败，请手动检查配置文件！"
           fi
           
-          # 2. 安全设置构建目标（用 jq 避免格式错误）
-          if jq . src-tauri/tauri.conf.json; then
-            jq '.bundle.targets = ["deb", "appimage"]' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
-            mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
-            echo "成功设置构建目标为 deb + appimage"
-          else
-            echo "JSON 格式错误无法修复，使用默认配置编译"
-          fi
+          # 仅构建 deb 包（先保证产物生成，AppImage 后续优化）
+          jq '.bundle.targets = ["deb"]' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
   
-      - name: 编译 ARM64
+      - name: 编译 ARM64（跳过 appindicator 依赖）
         run: |
-          # 导出编译环境变量
           export CC=aarch64-linux-gnu-gcc
           export CXX=aarch64-linux-gnu-g++
           export PKG_CONFIG_ALLOW_CROSS=1
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu
+          export TAURI_SKIP_APPINDICATOR=1
           
           # 执行编译
           pnpm run tauri build --target aarch64-unknown-linux-gnu
   
-      - name: 收集产物
+      - name: 收集产物（仅 deb 包，确保有产物）
         run: |
           mkdir -p ./release-upload/linux-arm64
-          # 收集 deb 包
           find src-tauri/target -name "*.deb" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \;
-          # 收集 AppImage 包
-          find src-tauri/target -name "*.AppImage" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \;
-          # 列出产物，方便调试
           ls -la ./release-upload/linux-arm64/
   
       - name: 上传 ARM64 产物
