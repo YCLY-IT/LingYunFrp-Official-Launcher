@@ -320,7 +320,7 @@ jobs:
   build-linux-arm64:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-arm64
     steps:
       - name: 拉代码
         uses: actions/checkout@v4
@@ -328,23 +328,10 @@ jobs:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
 
-      - name: 安装 Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
         with:
-          targets: aarch64-unknown-linux-gnu
-
-      - name: 安装交叉编译工具链
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      - name: 配置 Cargo 交叉编译环境
-        run: |
-          mkdir -p ~/.cargo
-          cat > ~/.cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          EOF
+          key: ${{ needs.prepare.outputs.cache-key }}-linux-arm64
 
       - uses: pnpm/action-setup@v2
         with:
@@ -355,70 +342,43 @@ jobs:
           node-version: 22
           cache: "pnpm"
 
-      - name: 安装项目依赖
+      - name: 缓存 Tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-linux-arm64-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: tauri-linux-arm64-
+
+      - name: 装依赖
         run: pnpm install
 
-      - name: 使用 Docker 编译 ARM64
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: 装系统库
         run: |
-          # 创建 Dockerfile
-          cat > Dockerfile.arm64 << 'DOCKEREOF'
-          FROM ubuntu:22.04
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libglib2.0-dev libsoup-3.0-dev pkg-config \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
-          ENV DEBIAN_FRONTEND=noninteractive
+      - name: 编 ARM64
+        run: pnpm run tauri build --target aarch64-unknown-linux-gnu
 
-          RUN apt-get update && apt-get install -y \
-              curl \
-              ca-certificates \
-              gnupg \
-              lsb-release \
-              build-essential \
-              pkg-config \
-              libgtk-3-dev \
-              libwebkit2gtk-4.1-dev \
-              libayatana-appindicator3-dev \
-              librsvg2-dev \
-              libssl-dev \
-              && rm -rf /var/lib/apt/lists/*
-
-          # 安装 Node.js
-          RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-              && apt-get install -y nodejs
-
-          # 安装 Rust
-          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          ENV PATH="/root/.cargo/bin:${PATH}"
-          RUN rustup target add aarch64-unknown-linux-gnu
-
-          # 安装 pnpm
-            RUN npm install -g pnpm@10
-
-          WORKDIR /app
-          DOCKEREOF
-
-          # 构建 Docker 镜像
-          docker build -f Dockerfile.arm64 -t tauri-arm64-builder .
-
-          # 在容器中编译
-          docker run --rm \
-            -v "$(pwd):/app" \
-            -e CARGO_HOME=/app/.cargo-cache \
-            -e CI=true \
-            -e PNPM_IGNORE_PACKAGE_MANAGER_VERSION=true \
-            tauri-arm64-builder \
-            bash -c "pnpm install --frozen-lockfile && pnpm run tauri build --target aarch64-unknown-linux-gnu"
-
-      - name: 收集产物
+      - name: 收包
         run: |
           mkdir -p ./release-upload/linux-arm64
-          find src-tauri/target -name "*.deb" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
-          find src-tauri/target -name "*.AppImage" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
-          find src-tauri/target -name "*.rpm" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
-          find src-tauri/target -name "*.tar.gz" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
+          for dir in deb appimage rpm tar.gz; do
+            cp src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/${dir}/* ./release-upload/linux-arm64/ 2>/dev/null || true
+          done
 
-      - name: 验证产物
-        run: ls -la ./release-upload/linux-arm64/ || true
-
-      - name: 上传产物
+      - name: 传产物
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64
