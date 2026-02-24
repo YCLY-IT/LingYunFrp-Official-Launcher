@@ -327,21 +327,21 @@ jobs:
         with:
           repository: YCLY-IT/LingYunFrp-Client-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
-  
+      
       - name: 缓存 Rust
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ needs.prepare.outputs.cache-key }}-linux-arm64
-  
+      
       - uses: pnpm/action-setup@v2
         with:
           version: 10
-  
+          
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: "pnpm"
-  
+      
       - name: 缓存 Tauri
         uses: actions/cache@v4
         with:
@@ -351,7 +351,7 @@ jobs:
             ~/.cargo/git
           key: tauri-linux-arm64-${{ needs.prepare.outputs.cache-key }}
           restore-keys: tauri-linux-arm64-
-  
+      
       - name: 装依赖
         run: pnpm install
   
@@ -360,39 +360,35 @@ jobs:
         with:
           targets: aarch64-unknown-linux-gnu
   
-      - name: 配置 ARM64 交叉编译环境（修复源配置）
+      - name: 配置 ARM64 交叉编译环境
         run: |
-          # 1. 备份原有源列表
+          # 备份原有源列表
           sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
           
-          # 2. 清空原有源，重新配置（仅保留 amd64 主源 + arm64 ports 源）
+          # 重新配置源（仅保留必要的 amd64 + arm64 源）
           sudo tee /etc/apt/sources.list > /dev/null <<EOF
-          # AMD64 主源（用于本机运行）
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
           deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
-          
-          # ARM64 交叉编译源（仅用 ports.ubuntu.com）
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
           EOF
           
-          # 3. 添加 ARM64 架构并更新源（跳过失败的索引，不影响核心库）
+          # 添加 ARM64 架构并更新源
           sudo dpkg --add-architecture arm64
-          sudo apt-get update -y --allow-insecure-repositories || true
+          sudo apt-get update -y
           
-          # 4. 安装基础交叉编译工具
+          # 安装基础工具和 jq（用于安全编辑 JSON）
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross \
             patchelf \
-            pkg-config
+            pkg-config \
+            jq
           
-          # 5. 安装 ARM64 依赖库（仅安装核心库，忽略非必要报错）
+          # 安装 ARM64 依赖库
           sudo apt-get install -y --no-install-recommends \
             "libglib2.0-dev:arm64" \
             "libgtk-3-dev:arm64" \
@@ -400,7 +396,7 @@ jobs:
             "libwebkit2gtk-4.1-dev:arm64" \
             "libayatana-appindicator3-dev:arm64" \
             "librsvg2-dev:arm64" \
-            "libssl-dev:arm64" || true
+            "libssl-dev:arm64"
   
       - name: 配置 Cargo + PKG_CONFIG 跨编译
         run: |
@@ -411,21 +407,35 @@ jobs:
           linker = "aarch64-linux-gnu-gcc"
           EOF
   
-          # 配置 pkg-config 环境变量（强制指向 ARM64 库）
+          # 配置 pkg-config 环境变量
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
           echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
           echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
   
-      - name: 允许构建所有包（deb + AppImage）
+      - name: 验证并修复 tauri.conf.json 格式（关键）
         run: |
-          # 容错处理：确保 targets 配置正确
-          if [ -f "src-tauri/tauri.conf.json" ]; then
-            sed -i 's/"targets":.*$/\"targets\": [\"deb\", \"appimage\"]/' src-tauri/tauri.conf.json 2>/dev/null || true
+          # 1. 先验证 JSON 格式是否合法
+          if ! jq . src-tauri/tauri.conf.json; then
+            echo "发现 tauri.conf.json 格式错误，尝试自动修复基础问题..."
+            # 修复常见的 JSON 错误：末尾多余逗号
+            sed -i 's/,\s*}/}/g' src-tauri/tauri.conf.json
+            sed -i 's/,\s*]/]/g' src-tauri/tauri.conf.json
+            # 再次验证
+            jq . src-tauri/tauri.conf.json || echo "自动修复失败，请手动检查配置文件！"
+          fi
+          
+          # 2. 安全设置构建目标（用 jq 避免格式错误）
+          if jq . src-tauri/tauri.conf.json; then
+            jq '.bundle.targets = ["deb", "appimage"]' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+            mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+            echo "成功设置构建目标为 deb + appimage"
+          else
+            echo "JSON 格式错误无法修复，使用默认配置编译"
           fi
   
-      - name: 编译 ARM64（忽略非致命警告）
+      - name: 编译 ARM64
         run: |
-          # 强制指定编译环境变量，确保交叉编译生效
+          # 导出编译环境变量
           export CC=aarch64-linux-gnu-gcc
           export CXX=aarch64-linux-gnu-g++
           export PKG_CONFIG_ALLOW_CROSS=1
@@ -433,23 +443,25 @@ jobs:
           export PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu
           
           # 执行编译
-          pnpm run tauri build --target aarch64-unknown-linux-gnu || true
+          pnpm run tauri build --target aarch64-unknown-linux-gnu
   
-      - name: 收集产物（容错处理）
+      - name: 收集产物
         run: |
           mkdir -p ./release-upload/linux-arm64
           # 收集 deb 包
-          find src-tauri/target -name "*.deb" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
+          find src-tauri/target -name "*.deb" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \;
           # 收集 AppImage 包
-          find src-tauri/target -name "*.AppImage" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \; 2>/dev/null || true
+          find src-tauri/target -name "*.AppImage" -path "*/aarch64-unknown-linux-gnu/*" -exec cp {} ./release-upload/linux-arm64/ \;
+          # 列出产物，方便调试
+          ls -la ./release-upload/linux-arm64/
   
-      - name: 上传 ARM64 产物（即使部分失败也上传）
+      - name: 上传 ARM64 产物
         uses: actions/upload-artifact@v4
-        if: ${{ always() }}
         with:
           name: linux-arm64
           path: ./release-upload/linux-arm64/*
           retention-days: 1
+          
   merge-linux:
     needs: [build-linux-x64, build-linux-arm64]
     if: ${{ always() }}  # 即使某个架构编译失败，仍执行合并
