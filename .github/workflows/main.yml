@@ -452,22 +452,27 @@ jobs:
           retention-days: 1
   merge-linux:
     needs: [build-linux-x64, build-linux-arm64]
-    if: ${{ always() && (needs.build-linux-x64.result == 'success' || needs.build-linux-arm64.result == 'success') }}
+    if: ${{ always() }}  # 即使某个架构编译失败，仍执行合并
     runs-on: ubuntu-latest
     steps:
-      - name: 下载 x64
+      - name: 创建产物目录
+        run: mkdir -p ./release-upload/linux
+  
+      - name: 下载 x64 产物（容错：不存在则跳过）
         uses: actions/download-artifact@v4
+        if: ${{ needs.build-linux-x64.result == 'success' }}
         with:
           name: linux-x64
           path: ./release-upload/linux
-        
-      - name: 下载 ARM64
+      
+      - name: 下载 ARM64 产物（容错：不存在则跳过）
         uses: actions/download-artifact@v4
+        if: ${{ needs.build-linux-arm64.result == 'success' }}
         with:
           name: linux-arm64
           path: ./release-upload/linux
   
-      - name: 传合并产物
+      - name: 传合并产物（即使为空也上传，避免后续报错）
         uses: actions/upload-artifact@v4
         with:
           name: linux-all
@@ -511,37 +516,41 @@ jobs:
       
       - name: 装依赖
         run: pnpm install
-
+  
       - name: 装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc
-
-      - name: 并行编三个架构
+  
+      - name: 串行编译 Windows 各架构（稳定优先）
         shell: pwsh
         run: |
-          $jobs = @()
-          $jobs += Start-Job { pnpm run tauri build --target x86_64-pc-windows-msvc }
-          $jobs += Start-Job { pnpm run tauri build --target i686-pc-windows-msvc }
-          $jobs += Start-Job { pnpm run tauri build --target aarch64-pc-windows-msvc }
-          $jobs | Wait-Job | Receive-Job
-
+          # 串行编译，避免资源冲突
+          Write-Host "编译 x64 架构..."
+          pnpm run tauri build --target x86_64-pc-windows-msvc
+          
+          Write-Host "编译 x86 架构..."
+          pnpm run tauri build --target i686-pc-windows-msvc
+          
+          Write-Host "编译 ARM64 架构..."
+          pnpm run tauri build --target aarch64-pc-windows-msvc
+  
       - name: 收包
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ./release-upload/windows
-          foreach ($target in @("x86_64", "i686", "aarch64")) {
-            Get-ChildItem "src-tauri/target/${target}-pc-windows-msvc/release/bundle/*/*" -Include *.msi,*.exe,*.zip | 
-              Copy-Item -Destination ./release-upload/windows/ -ErrorAction SilentlyContinue
-          }
-
+          # 收集所有 Windows 产物（容错）
+          Get-ChildItem "src-tauri/target/" -Recurse -Include *.msi,*.exe,*.zip | 
+            Where-Object { $_.FullName -match "x86_64|i686|aarch64" } |
+            Copy-Item -Destination ./release-upload/windows/ -ErrorAction SilentlyContinue
+  
       - name: 传产物
         uses: actions/upload-artifact@v4
         with:
           name: windows-all
           path: ./release-upload/windows/*
           retention-days: 1
-
+          
   release:
     needs: [prepare, build-macos, merge-linux, build-windows]
     if: |
