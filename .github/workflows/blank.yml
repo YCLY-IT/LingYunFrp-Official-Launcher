@@ -1,0 +1,687 @@
+name: Build Private Project and Release
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    tags:
+      - "v*"
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（例如 v1.0.0）"
+        required: true
+        type: string
+
+      platform:
+        description: "选择构建平台"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - macos
+          - linux
+          - windows
+
+      release_title:
+        description: "Release 标题（可选，默认使用版本号）"
+        required: false
+        default: ""
+        type: string
+
+      release_notes:
+        description: "更新说明（推送标签时自动套用模板，手动触发时填写）"
+        required: false
+        default: ""
+        type: string
+
+      force_recreate:
+        description: "如果 Release 已存在，是否强制更新"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+      title: ${{ steps.set-title.outputs.title }}
+      notes: ${{ steps.set-notes.outputs.notes }}
+      cache-key: ${{ steps.cache-key.outputs.key }}
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 准备版本信息
+        id: set-version
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: 准备标题
+        id: set-title
+        run: |
+          if [ -n "${{ inputs.release_title }}" ]; then
+            TITLE="${{ inputs.release_title }}"
+          else
+            TITLE="${{ steps.set-version.outputs.version }}"
+          fi
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+
+      - name: 生成缓存 key
+        id: cache-key
+        run: |
+          KEY="${{ hashFiles('**/Cargo.lock', '**/pnpm-lock.yaml') }}"
+          echo "key=$KEY" >> $GITHUB_OUTPUT
+
+      - name: 准备更新说明
+        id: set-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.set-version.outputs.version }}"
+          BUILD_DATE=$(date '+%Y-%m-%d')
+
+          if [ "${{ github.event_name }}" == "push" ]; then
+            LAST_RUN=$(gh run list --workflow="Build Private Project and Release" --status=success --limit=1 --json createdAt -q '.[0].createdAt' 2>/dev/null || echo "")
+            CHANGES=""
+            if [ -n "$LAST_RUN" ]; then
+              SINCE=$(date -d "$LAST_RUN" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "")
+              [ -n "$SINCE" ] && CHANGES=$(git log --since="$SINCE" --pretty=format:"- %s" --no-merges | head -20)
+            fi
+            [ -z "$CHANGES" ] && CHANGES=$(git log -10 --pretty=format:"- %s" --no-merges)
+
+            echo 'LingYunFrp {{VERSION}} 正式发布！这是一个基于 Tauri + React 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。' > /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '### ✨ 主要功能' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '- **图形化配置管理** — 直观易用的界面，轻松管理 FRP 配置' >> /tmp/template.txt
+            echo '- **一键启停服务** — 快速启动和停止 FRP 服务' >> /tmp/template.txt
+            echo '- **实时日志查看** — 内置日志面板，实时显示运行状态' >> /tmp/template.txt
+            echo '- **系统托盘支持** — 最小化到托盘，快捷操作不打扰' >> /tmp/template.txt
+            echo '- **自动更新检测** — 自动检查新版本，及时获取更新' >> /tmp/template.txt
+            echo '- **多主题切换** — 支持明暗主题，适配不同使用场景' >> /tmp/template.txt
+            echo '- **跨平台支持** — 支持 Windows、macOS、Linux 三大平台' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '### 📦 下载安装' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '| 平台 | 架构 | 安装包 |' >> /tmp/template.txt
+            echo '|------|------|--------|' >> /tmp/template.txt
+            echo '| Windows | x64 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
+            echo '| Windows | x86 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
+            echo '| Windows | ARM64 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
+            echo '| macOS | x64 | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
+            echo '| macOS | ARM64 | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
+            echo '| macOS | Universal | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
+            echo '| Linux | x64 | `.deb` / `.AppImage` / `.rpm` / `.tar.gz` |' >> /tmp/template.txt
+            echo '| Linux | ARM64 | `.deb` / `.AppImage` / `.rpm` / `.tar.gz` |' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '### 🔧 系统要求' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '- **Windows**: Windows 10 及以上' >> /tmp/template.txt
+            echo '- **macOS**: macOS 11 及以上' >> /tmp/template.txt
+            echo '- **Linux**: Ubuntu 20.04+ / Debian 11+ / Fedora 35+' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '### 📝 安装指南' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '**Debian/Ubuntu:**' >> /tmp/template.txt
+            echo '```bash' >> /tmp/template.txt
+            echo "sudo dpkg -i LingYunFrp_${VERSION}_amd64.deb" >> /tmp/template.txt
+            echo 'sudo apt-get install -f' >> /tmp/template.txt
+            echo '```' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '**Fedora/RHEL:**' >> /tmp/template.txt
+            echo '```bash' >> /tmp/template.txt
+            echo "sudo rpm -i LingYunFrp-${VERSION}-1.x86_64.rpm" >> /tmp/template.txt
+            echo '```' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '**其他平台下载对应安装包直接安装**' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '### ⚠️ 注意事项' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '- Windows: SmartScreen 提示时点击"仍要运行"' >> /tmp/template.txt
+            echo '- macOS: Gatekeeper 提示时前往"隐私与安全性"授权' >> /tmp/template.txt
+            echo '- Linux: AppImage 需要 `chmod +x` 赋予执行权限' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '### 🔄 更新日志' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '**{{VERSION}} ({{BUILD_DATE}})**' >> /tmp/template.txt
+            echo '{{CHANGES}}' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '### 📋 反馈与支持' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '- 🌐 官网：https://www.lyfrp.cn' >> /tmp/template.txt
+            echo '- 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues' >> /tmp/template.txt
+            echo '- 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/discussions' >> /tmp/template.txt
+            echo '- 📧 邮箱：1263115878@qq.com' >> /tmp/template.txt
+            echo '- 💬 QQ群：882670857' >> /tmp/template.txt
+            echo '' >> /tmp/template.txt
+            echo '**感谢使用 LingYunFrp！**' >> /tmp/template.txt
+
+            NOTES=$(cat /tmp/template.txt | sed "s/{{VERSION}}/${VERSION}/g" | sed "s/{{BUILD_DATE}}/${BUILD_DATE}/g" | sed "s/{{CHANGES}}/${CHANGES}/g")
+
+          elif [ -n "${{ inputs.release_notes }}" ]; then
+            NOTES="${{ inputs.release_notes }}"
+          else
+            NOTES="手动构建 ${VERSION}"
+          fi
+
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  build-macos:
+    needs: prepare
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos' }}
+    runs-on: macos-latest
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+        with:
+          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.prepare.outputs.cache-key }}-macos
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: 缓存 Tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-macos-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: tauri-macos-
+
+      - name: 装依赖
+        run: pnpm install
+
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: 编 Universal
+        run: pnpm run tauri build --target universal-apple-darwin
+
+      - name: 改文件名
+        run: |
+          cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
+          for f in *.dmg; do mv "$f" "${f%.dmg}_universal.dmg"; done
+
+      - name: 收包
+        run: |
+          mkdir -p ./release-upload/macos
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg ./release-upload/macos/
+          cp src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz ./release-upload/macos/ 2>/dev/null || true
+
+      - name: 传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-all
+          path: ./release-upload/macos/*
+          retention-days: 1
+
+  build-linux-x64:
+    needs: prepare
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+        with:
+          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.prepare.outputs.cache-key }}-linux-x64
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: 缓存 Tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-linux-x64-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: tauri-linux-x64-
+
+      - name: 装依赖
+        run: pnpm install
+
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: 装系统库
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libglib2.0-dev libsoup-3.0-dev pkg-config \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
+            xdg-utils
+
+      - name: 编 x64
+        run: pnpm run tauri build --target x86_64-unknown-linux-gnu
+
+      - name: 收包并重命名
+        run: |
+          mkdir -p ./release-upload/linux-x64
+          VERSION="${{ needs.prepare.outputs.version }}"
+          VERSION_NO_V=$(echo "$VERSION" | sed 's/^v//')
+          TARGET_DIR="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
+
+          if [ -d "$TARGET_DIR/deb" ]; then
+            for f in "$TARGET_DIR/deb"/*.deb; do
+              [ -f "$f" ] || continue
+              filename=$(basename "$f")
+              if [[ "$filename" == FRP* ]] || [[ "$filename" == frp* ]] || [[ "$filename" == lingyunfrp* ]] || [[ "$filename" == LingYunFrp* ]]; then
+                if [[ "$filename" =~ [0-9]+\.[0-9]+\.[0-9]+ ]]; then
+                  newname="LingYunFrp_${VERSION_NO_V}_amd64.deb"
+                  cp "$f" "./release-upload/linux-x64/$newname"
+                else
+                  cp "$f" "./release-upload/linux-x64/"
+                fi
+              else
+                cp "$f" "./release-upload/linux-x64/"
+              fi
+            done
+          fi
+
+          if [ -d "$TARGET_DIR/rpm" ]; then
+            for f in "$TARGET_DIR/rpm"/*.rpm; do
+              [ -f "$f" ] || continue
+              filename=$(basename "$f")
+              if [[ "$filename" == FRP* ]] || [[ "$filename" == frp* ]] || [[ "$filename" == lingyunfrp* ]] || [[ "$filename" == LingYunFrp* ]]; then
+                newname="LingYunFrp-${VERSION_NO_V}-1.x86_64.rpm"
+                cp "$f" "./release-upload/linux-x64/$newname"
+              else
+                cp "$f" "./release-upload/linux-x64/"
+              fi
+            done
+          fi
+
+          if [ -d "$TARGET_DIR/appimage" ]; then
+            for f in "$TARGET_DIR/appimage"/*.AppImage; do
+              [ -f "$f" ] || continue
+              filename=$(basename "$f")
+              if [[ "$filename" == FRP* ]] || [[ "$filename" == frp* ]] || [[ "$filename" == lingyunfrp* ]] || [[ "$filename" == LingYunFrp* ]]; then
+                newname="LingYunFrp_${VERSION_NO_V}_amd64.AppImage"
+                cp "$f" "./release-upload/linux-x64/$newname"
+              else
+                cp "$f" "./release-upload/linux-x64/"
+              fi
+            done
+          fi
+
+          if [ -d "$TARGET_DIR/tar.gz" ]; then
+            for f in "$TARGET_DIR/tar.gz"/*.tar.gz; do
+              [ -f "$f" ] || continue
+              filename=$(basename "$f")
+              if [[ "$filename" == FRP* ]] || [[ "$filename" == frp* ]] || [[ "$filename" == lingyunfrp* ]] || [[ "$filename" == LingYunFrp* ]]; then
+                newname="LingYunFrp_${VERSION_NO_V}_linux_x64.tar.gz"
+                cp "$f" "./release-upload/linux-x64/$newname"
+              else
+                cp "$f" "./release-upload/linux-x64/"
+              fi
+            done
+          fi
+
+          echo "Files in release-upload/linux-x64:"
+          ls -la ./release-upload/linux-x64/
+
+      - name: 传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: ./release-upload/linux-x64/*
+          retention-days: 1
+
+  build-linux-arm64:
+    needs: prepare
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+        with:
+          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.prepare.outputs.cache-key }}-linux-arm64
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: 缓存 Tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-linux-arm64-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: tauri-linux-arm64-
+
+      - name: 装依赖
+        run: pnpm install
+
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: 装系统库
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libglib2.0-dev libsoup-3.0-dev pkg-config \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
+            xdg-utils
+
+      - name: 编 ARM64
+        run: pnpm run tauri build --target aarch64-unknown-linux-gnu
+
+      - name: 收包并重命名
+        run: |
+          mkdir -p ./release-upload/linux-arm64
+          VERSION="${{ needs.prepare.outputs.version }}"
+          VERSION_NO_V=$(echo "$VERSION" | sed 's/^v//')
+          TARGET_DIR="src-tauri/target/aarch64-unknown-linux-gnu/release/bundle"
+
+          if [ -d "$TARGET_DIR/deb" ]; then
+            for f in "$TARGET_DIR/deb"/*.deb; do
+              [ -f "$f" ] || continue
+              filename=$(basename "$f")
+              if [[ "$filename" == FRP* ]] || [[ "$filename" == frp* ]] || [[ "$filename" == lingyunfrp* ]] || [[ "$filename" == LingYunFrp* ]]; then
+                newname="LingYunFrp_${VERSION_NO_V}_arm64.deb"
+                cp "$f" "./release-upload/linux-arm64/$newname"
+              else
+                cp "$f" "./release-upload/linux-arm64/"
+              fi
+            done
+          fi
+
+          if [ -d "$TARGET_DIR/rpm" ]; then
+            for f in "$TARGET_DIR/rpm"/*.rpm; do
+              [ -f "$f" ] || continue
+              filename=$(basename "$f")
+              if [[ "$filename" == FRP* ]] || [[ "$filename" == frp* ]] || [[ "$filename" == lingyunfrp* ]] || [[ "$filename" == LingYunFrp* ]]; then
+                newname="LingYunFrp-${VERSION_NO_V}-1.aarch64.rpm"
+                cp "$f" "./release-upload/linux-arm64/$newname"
+              else
+                cp "$f" "./release-upload/linux-arm64/"
+              fi
+            done
+          fi
+
+          if [ -d "$TARGET_DIR/appimage" ]; then
+            for f in "$TARGET_DIR/appimage"/*.AppImage; do
+              [ -f "$f" ] || continue
+              filename=$(basename "$f")
+              if [[ "$filename" == FRP* ]] || [[ "$filename" == frp* ]] || [[ "$filename" == lingyunfrp* ]] || [[ "$filename" == LingYunFrp* ]]; then
+                newname="LingYunFrp_${VERSION_NO_V}_arm64.AppImage"
+                cp "$f" "./release-upload/linux-arm64/$newname"
+              else
+                cp "$f" "./release-upload/linux-arm64/"
+              fi
+            done
+          fi
+
+          if [ -d "$TARGET_DIR/tar.gz" ]; then
+            for f in "$TARGET_DIR/tar.gz"/*.tar.gz; do
+              [ -f "$f" ] || continue
+              filename=$(basename "$f")
+              if [[ "$filename" == FRP* ]] || [[ "$filename" == frp* ]] || [[ "$filename" == lingyunfrp* ]] || [[ "$filename" == LingYunFrp* ]]; then
+                newname="LingYunFrp_${VERSION_NO_V}_linux_arm64.tar.gz"
+                cp "$f" "./release-upload/linux-arm64/$newname"
+              else
+                cp "$f" "./release-upload/linux-arm64/"
+              fi
+            done
+          fi
+
+          echo "Files in release-upload/linux-arm64:"
+          ls -la ./release-upload/linux-arm64/
+
+      - name: 传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: ./release-upload/linux-arm64/*
+          retention-days: 1
+
+  merge-linux:
+    needs: [build-linux-x64, build-linux-arm64]
+    if: ${{ always() && (needs.build-linux-x64.result == 'success' || needs.build-linux-arm64.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 创建产物目录
+        run: mkdir -p ./release-upload/linux
+
+      - name: 下载 x64 产物
+        if: ${{ needs.build-linux-x64.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: ./release-upload/linux
+
+      - name: 下载 ARM64 产物
+        if: ${{ needs.build-linux-arm64.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: ./release-upload/linux
+
+      - name: 列出产物
+        run: ls -la ./release-upload/linux/
+
+      - name: 传合并产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-all
+          path: ./release-upload/linux/*
+          retention-days: 1
+          if-no-files-found: warn
+
+  build-windows:
+    needs: prepare
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+          - target: i686-pc-windows-msvc
+            arch: x86
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+        with:
+          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+
+      - name: 缓存 Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ needs.prepare.outputs.cache-key }}-windows-${{ matrix.arch }}
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: 缓存 Tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-windows-${{ matrix.arch }}-${{ needs.prepare.outputs.cache-key }}
+          restore-keys: tauri-windows-${{ matrix.arch }}-
+
+      - name: 装依赖
+        run: pnpm install
+
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 编译 ${{ matrix.arch }}
+        run: pnpm run tauri build --target ${{ matrix.target }}
+
+      - name: 收包
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ./release-upload/windows
+          $bundleDir = "src-tauri/target/${{ matrix.target }}/release/bundle"
+          Get-ChildItem $bundleDir -Recurse -File |
+            Where-Object { $_.Extension -match '\.(msi|exe|zip|nsis)$' } |
+            ForEach-Object {
+              Copy-Item $_.FullName ./release-upload/windows/ -Force
+              Write-Host "Collected: $($_.Name)"
+            }
+
+      - name: 传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: ./release-upload/windows/*
+          retention-days: 1
+
+  merge-windows:
+    needs: build-windows
+    if: ${{ always() && needs.build-windows.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 创建产物目录
+        run: mkdir -p ./release-upload/windows
+
+      - name: 下载 x64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: ./release-upload/windows
+
+      - name: 下载 x86 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x86
+          path: ./release-upload/windows
+
+      - name: 下载 arm64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-arm64
+          path: ./release-upload/windows
+
+      - name: 列出产物
+        run: ls -la ./release-upload/windows/
+
+      - name: 传合并产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-all
+          path: ./release-upload/windows/*
+          retention-days: 1
+          if-no-files-found: warn
+
+  release:
+    needs: [prepare, build-macos, merge-linux, merge-windows]
+    if: |
+      always() &&
+      (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped') &&
+      (needs.merge-linux.result == 'success' || needs.merge-linux.result == 'skipped') &&
+      (needs.merge-windows.result == 'success' || needs.merge-windows.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载产物
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: 检查产物
+        run: |
+          echo "Artifacts downloaded:"
+          find ./artifacts -type f -name "*" | head -20
+
+      - name: 删旧 Release
+        if: ${{ inputs.force_recreate == true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          echo "Deleting release $VERSION if exists..."
+          gh release delete "$VERSION" --yes 2>/dev/null || echo "Release not found"
+          git push origin :refs/tags/$VERSION 2>/dev/null || echo "Tag not found"
+          sleep 5
+
+      - name: 发 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: ${{ needs.prepare.outputs.title }}
+          body: ${{ needs.prepare.outputs.notes }}
+          files: ./artifacts/**/*
+          fail_on_unmatched_files: false
