@@ -1,4 +1,4 @@
-name: Build Private Project and Release
+name: Build Private Project and Release (React)
 
 permissions:
   contents: write
@@ -192,7 +192,7 @@ jobs:
       - name: 拉代码
         uses: actions/checkout@v4
         with:
-          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          repository: YCLY-IT/LingYunFrp-React-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
 
       - name: 缓存 Rust
@@ -256,7 +256,7 @@ jobs:
       - name: 拉代码
         uses: actions/checkout@v4
         with:
-          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          repository: YCLY-IT/LingYunFrp-React-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
 
       - name: 缓存 Rust
@@ -384,7 +384,7 @@ jobs:
       - name: 拉代码
         uses: actions/checkout@v4
         with:
-          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          repository: YCLY-IT/LingYunFrp-React-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
 
       - name: 缓存 Rust
@@ -552,7 +552,7 @@ jobs:
       - name: 拉代码
         uses: actions/checkout@v4
         with:
-          repository: YCLY-IT/LingYunFrp-Client-Launcher
+          repository: YCLY-IT/LingYunFrp-React-Launcher
           token: ${{ secrets.PRIVATE_REPO_PAT }}
 
       - name: 缓存 Rust
