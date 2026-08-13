@@ -36,12 +36,6 @@ on:
         default: ""
         type: string
 
-      release_notes:
-        description: "更新说明（推送标签时自动套用模板，手动触发时填写）"
-        required: false
-        default: ""
-        type: string
-
       force_recreate:
         description: "如果 Release 已存在，是否强制更新"
         required: false
@@ -57,7 +51,7 @@ jobs:
       notes: ${{ steps.set-notes.outputs.notes }}
       cache-key: ${{ steps.cache-key.outputs.key }}
     steps:
-      - name: 拉代码
+      - name: 拉代码（公开仓库）
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -92,104 +86,126 @@ jobs:
         id: set-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_PAT }}
         run: |
           VERSION="${{ steps.set-version.outputs.version }}"
           BUILD_DATE=$(date '+%Y-%m-%d')
-
-          if [ "${{ github.event_name }}" == "push" ]; then
-            LAST_RUN=$(gh run list --workflow="Build Private Project and Release" --status=success --limit=1 --json createdAt -q '.[0].createdAt' 2>/dev/null || echo "")
-            CHANGES=""
-            if [ -n "$LAST_RUN" ]; then
-              SINCE=$(date -d "$LAST_RUN" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "")
-              [ -n "$SINCE" ] && CHANGES=$(git log --since="$SINCE" --pretty=format:"- %s" --no-merges | head -20)
+          
+          # 克隆私有仓库获取提交历史
+          echo "克隆私有仓库获取提交历史..."
+          git clone https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/YCLY-IT/LingYunFrp-React-Launcher.git /tmp/private-repo
+          cd /tmp/private-repo
+          
+          # 获取上一次成功运行的时间（从公开仓库查询）
+          LAST_RUN=$(gh run list --repo="${{ github.repository }}" --workflow="Build Private Project and Release (React)" --status=success --limit=1 --json createdAt -q '.[0].createdAt' 2>/dev/null || echo "")
+          echo "上一次成功运行时间: $LAST_RUN"
+          
+          # 获取更新日志
+          CHANGES=""
+          if [ -n "$LAST_RUN" ]; then
+            # 将 ISO 时间转换为 git 可识别的格式
+            SINCE=$(date -d "$LAST_RUN" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "")
+            if [ -n "$SINCE" ]; then
+              CHANGES=$(git log --since="$SINCE" --pretty=format:"- %s" --no-merges | head -30)
+              echo "获取到 $SINCE 之后的提交记录"
             fi
-            [ -z "$CHANGES" ] && CHANGES=$(git log -10 --pretty=format:"- %s" --no-merges)
-
-            echo 'LingYunFrp {{VERSION}} 正式发布！这是一个基于 Tauri + React 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。' > /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '### ✨ 主要功能' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '- **图形化配置管理** — 直观易用的界面，轻松管理 FRP 配置' >> /tmp/template.txt
-            echo '- **一键启停服务** — 快速启动和停止 FRP 服务' >> /tmp/template.txt
-            echo '- **实时日志查看** — 内置日志面板，实时显示运行状态' >> /tmp/template.txt
-            echo '- **系统托盘支持** — 最小化到托盘，快捷操作不打扰' >> /tmp/template.txt
-            echo '- **自动更新检测** — 自动检查新版本，及时获取更新' >> /tmp/template.txt
-            echo '- **多主题切换** — 支持明暗主题，适配不同使用场景' >> /tmp/template.txt
-            echo '- **跨平台支持** — 支持 Windows、macOS、Linux 三大平台' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '### 📦 下载安装' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '| 平台 | 架构 | 安装包 |' >> /tmp/template.txt
-            echo '|------|------|--------|' >> /tmp/template.txt
-            echo '| Windows | x64 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
-            echo '| Windows | x86 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
-            echo '| Windows | ARM64 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
-            echo '| macOS | x64 | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
-            echo '| macOS | ARM64 | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
-            echo '| macOS | Universal | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
-            echo '| Linux | x64 | `.deb` / `.AppImage` / `.rpm` / `.tar.gz` |' >> /tmp/template.txt
-            echo '| Linux | ARM64 | `.deb` / `.AppImage` / `.rpm` / `.tar.gz` |' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '### 🔧 系统要求' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '- **Windows**: Windows 10 及以上' >> /tmp/template.txt
-            echo '- **macOS**: macOS 11 及以上' >> /tmp/template.txt
-            echo '- **Linux**: Ubuntu 20.04+ / Debian 11+ / Fedora 35+' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '### 📝 安装指南' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '**Debian/Ubuntu:**' >> /tmp/template.txt
-            echo '```bash' >> /tmp/template.txt
-            echo "sudo dpkg -i LingYunFrp_${VERSION}_amd64.deb" >> /tmp/template.txt
-            echo 'sudo apt-get install -f' >> /tmp/template.txt
-            echo '```' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '**Fedora/RHEL:**' >> /tmp/template.txt
-            echo '```bash' >> /tmp/template.txt
-            echo "sudo rpm -i LingYunFrp-${VERSION}-1.x86_64.rpm" >> /tmp/template.txt
-            echo '```' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '**其他平台下载对应安装包直接安装**' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '### ⚠️ 注意事项' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '- Windows: SmartScreen 提示时点击"仍要运行"' >> /tmp/template.txt
-            echo '- macOS: Gatekeeper 提示时前往"隐私与安全性"授权' >> /tmp/template.txt
-            echo '- Linux: AppImage 需要 `chmod +x` 赋予执行权限' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '### 🔄 更新日志' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '**{{VERSION}} ({{BUILD_DATE}})**' >> /tmp/template.txt
-            echo '{{CHANGES}}' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '### 📋 反馈与支持' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '- 🌐 官网：https://www.lyfrp.cn' >> /tmp/template.txt
-            echo '- 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues' >> /tmp/template.txt
-            echo '- 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/discussions' >> /tmp/template.txt
-            echo '- 📧 邮箱：1263115878@qq.com' >> /tmp/template.txt
-            echo '- 💬 QQ群：882670857' >> /tmp/template.txt
-            echo '' >> /tmp/template.txt
-            echo '**感谢使用 LingYunFrp！**' >> /tmp/template.txt
-
-            NOTES=$(cat /tmp/template.txt | sed "s/{{VERSION}}/${VERSION}/g" | sed "s/{{BUILD_DATE}}/${BUILD_DATE}/g" | sed "s/{{CHANGES}}/${CHANGES}/g")
-
-          elif [ -n "${{ inputs.release_notes }}" ]; then
-            NOTES="${{ inputs.release_notes }}"
-          else
-            NOTES="手动构建 ${VERSION}"
           fi
+          
+          # 如果没获取到，回退到最近10条
+          if [ -z "$CHANGES" ]; then
+            CHANGES=$(git log -10 --pretty=format:"- %s" --no-merges)
+            echo "未获取到增量提交，使用最近10条"
+          fi
+          
+          echo "更新日志内容:"
+          echo "$CHANGES"
+          
+          # 回到公开仓库目录
+          cd -
+          
+          # 生成 Release Notes 模板
+          echo 'LingYunFrp {{VERSION}} 正式发布！这是一个基于 Tauri + React 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。' > /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '### ✨ 主要功能' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '- **图形化配置管理** — 直观易用的界面，轻松管理 FRP 配置' >> /tmp/template.txt
+          echo '- **一键启停服务** — 快速启动和停止 FRP 服务' >> /tmp/template.txt
+          echo '- **实时日志查看** — 内置日志面板，实时显示运行状态' >> /tmp/template.txt
+          echo '- **系统托盘支持** — 最小化到托盘，快捷操作不打扰' >> /tmp/template.txt
+          echo '- **自动更新检测** — 自动检查新版本，及时获取更新' >> /tmp/template.txt
+          echo '- **多主题切换** — 支持明暗主题，适配不同使用场景' >> /tmp/template.txt
+          echo '- **跨平台支持** — 支持 Windows、macOS、Linux 三大平台' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '### 📦 下载安装' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '| 平台 | 架构 | 安装包 |' >> /tmp/template.txt
+          echo '|------|------|--------|' >> /tmp/template.txt
+          echo '| Windows | x64 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
+          echo '| Windows | x86 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
+          echo '| Windows | ARM64 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
+          echo '| macOS | x64 | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
+          echo '| macOS | ARM64 | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
+          echo '| macOS | Universal | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
+          echo '| Linux | x64 | `.deb` / `.AppImage` / `.rpm` / `.tar.gz` |' >> /tmp/template.txt
+          echo '| Linux | ARM64 | `.deb` / `.AppImage` / `.rpm` / `.tar.gz` |' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '### 🔧 系统要求' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '- **Windows**: Windows 10 及以上' >> /tmp/template.txt
+          echo '- **macOS**: macOS 11 及以上' >> /tmp/template.txt
+          echo '- **Linux**: Ubuntu 20.04+ / Debian 11+ / Fedora 35+' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '### 📝 安装指南' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '**Debian/Ubuntu:**' >> /tmp/template.txt
+          echo '```bash' >> /tmp/template.txt
+          echo "sudo dpkg -i LingYunFrp_${VERSION}_amd64.deb" >> /tmp/template.txt
+          echo 'sudo apt-get install -f' >> /tmp/template.txt
+          echo '```' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '**Fedora/RHEL:**' >> /tmp/template.txt
+          echo '```bash' >> /tmp/template.txt
+          echo "sudo rpm -i LingYunFrp-${VERSION}-1.x86_64.rpm" >> /tmp/template.txt
+          echo '```' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '**其他平台下载对应安装包直接安装**' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '### ⚠️ 注意事项' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '- Windows: SmartScreen 提示时点击"仍要运行"' >> /tmp/template.txt
+          echo '- macOS: Gatekeeper 提示时前往"隐私与安全性"授权' >> /tmp/template.txt
+          echo '- Linux: AppImage 需要 `chmod +x` 赋予执行权限' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '### 🔄 更新日志' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '**{{VERSION}} ({{BUILD_DATE}})**' >> /tmp/template.txt
+          echo '{{CHANGES}}' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '### 📋 反馈与支持' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '- 🌐 官网：https://www.lyfrp.cn' >> /tmp/template.txt
+          echo '- 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues' >> /tmp/template.txt
+          echo '- 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/discussions' >> /tmp/template.txt
+          echo '- 📧 邮箱：1263115878@qq.com' >> /tmp/template.txt
+          echo '- 💬 QQ群：882670857' >> /tmp/template.txt
+          echo '' >> /tmp/template.txt
+          echo '**感谢使用 LingYunFrp！**' >> /tmp/template.txt
+
+          # 替换占位符
+          NOTES=$(cat /tmp/template.txt | sed "s/{{VERSION}}/${VERSION}/g" | sed "s/{{BUILD_DATE}}/${BUILD_DATE}/g" | sed "s/{{CHANGES}}/${CHANGES}/g")
 
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           echo "$NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+
+  # ... 构建 jobs 保持不变 ...
 
   build-macos:
     needs: prepare
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'macos' }}
     runs-on: macos-latest
     steps:
-      - name: 拉代码
+      - name: 拉代码（私有仓库）
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-React-Launcher
@@ -253,7 +269,7 @@ jobs:
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     runs-on: ubuntu-22.04
     steps:
-      - name: 拉代码
+      - name: 拉代码（私有仓库）
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-React-Launcher
@@ -381,7 +397,7 @@ jobs:
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     runs-on: ubuntu-24.04-arm
     steps:
-      - name: 拉代码
+      - name: 拉代码（私有仓库）
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-React-Launcher
@@ -549,7 +565,7 @@ jobs:
             arch: arm64
 
     steps:
-      - name: 拉代码
+      - name: 拉代码（私有仓库）
         uses: actions/checkout@v4
         with:
           repository: YCLY-IT/LingYunFrp-React-Launcher
