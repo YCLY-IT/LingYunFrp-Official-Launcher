@@ -81,7 +81,6 @@ jobs:
         run: |
           KEY="${{ hashFiles('**/Cargo.lock', '**/pnpm-lock.yaml') }}"
           echo "key=$KEY" >> $GITHUB_OUTPUT
-
       - name: 准备更新说明
         id: set-notes
         env:
@@ -103,7 +102,6 @@ jobs:
           # 获取更新日志
           CHANGES=""
           if [ -n "$LAST_RUN" ]; then
-            # 将 ISO 时间转换为 git 可识别的格式
             SINCE=$(date -d "$LAST_RUN" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "")
             if [ -n "$SINCE" ]; then
               CHANGES=$(git log --since="$SINCE" --pretty=format:"- %s" --no-merges | head -30)
@@ -111,7 +109,6 @@ jobs:
             fi
           fi
           
-          # 如果没获取到，回退到最近10条
           if [ -z "$CHANGES" ]; then
             CHANGES=$(git log -10 --pretty=format:"- %s" --no-merges)
             echo "未获取到增量提交，使用最近10条"
@@ -120,85 +117,68 @@ jobs:
           echo "更新日志内容:"
           echo "$CHANGES"
           
-          # 回到公开仓库目录
           cd -
           
-          # 生成 Release Notes 模板
-          echo 'LingYunFrp {{VERSION}} 正式发布！这是一个基于 Tauri + React 的跨平台内网穿透工具，为用户提供现代化的 FRP 管理体验。' > /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '### ✨ 主要功能' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '- **图形化配置管理** — 直观易用的界面，轻松管理 FRP 配置' >> /tmp/template.txt
-          echo '- **一键启停服务** — 快速启动和停止 FRP 服务' >> /tmp/template.txt
-          echo '- **实时日志查看** — 内置日志面板，实时显示运行状态' >> /tmp/template.txt
-          echo '- **系统托盘支持** — 最小化到托盘，快捷操作不打扰' >> /tmp/template.txt
-          echo '- **自动更新检测** — 自动检查新版本，及时获取更新' >> /tmp/template.txt
-          echo '- **多主题切换** — 支持明暗主题，适配不同使用场景' >> /tmp/template.txt
-          echo '- **跨平台支持** — 支持 Windows、macOS、Linux 三大平台' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '### 📦 下载安装' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '| 平台 | 架构 | 安装包 |' >> /tmp/template.txt
-          echo '|------|------|--------|' >> /tmp/template.txt
-          echo '| Windows | x64 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
-          echo '| Windows | x86 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
-          echo '| Windows | ARM64 | `.msi` / `.exe` / `.zip` |' >> /tmp/template.txt
-          echo '| macOS | x64 | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
-          echo '| macOS | ARM64 | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
-          echo '| macOS | Universal | `.dmg` / `.app.tar.gz` |' >> /tmp/template.txt
-          echo '| Linux | x64 | `.deb` / `.AppImage` / `.rpm` / `.tar.gz` |' >> /tmp/template.txt
-          echo '| Linux | ARM64 | `.deb` / `.AppImage` / `.rpm` / `.tar.gz` |' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '### 🔧 系统要求' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '- **Windows**: Windows 10 及以上' >> /tmp/template.txt
-          echo '- **macOS**: macOS 11 及以上' >> /tmp/template.txt
-          echo '- **Linux**: Ubuntu 20.04+ / Debian 11+ / Fedora 35+' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '### 📝 安装指南' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '**Debian/Ubuntu:**' >> /tmp/template.txt
-          echo '```bash' >> /tmp/template.txt
-          echo "sudo dpkg -i LingYunFrp_${VERSION}_amd64.deb" >> /tmp/template.txt
-          echo 'sudo apt-get install -f' >> /tmp/template.txt
-          echo '```' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '**Fedora/RHEL:**' >> /tmp/template.txt
-          echo '```bash' >> /tmp/template.txt
-          echo "sudo rpm -i LingYunFrp-${VERSION}-1.x86_64.rpm" >> /tmp/template.txt
-          echo '```' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '**其他平台下载对应安装包直接安装**' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '### ⚠️ 注意事项' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '- Windows: SmartScreen 提示时点击"仍要运行"' >> /tmp/template.txt
-          echo '- macOS: Gatekeeper 提示时前往"隐私与安全性"授权' >> /tmp/template.txt
-          echo '- Linux: AppImage 需要 `chmod +x` 赋予执行权限' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '### 🔄 更新日志' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '**{{VERSION}} ({{BUILD_DATE}})**' >> /tmp/template.txt
-          echo '{{CHANGES}}' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '### 📋 反馈与支持' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '- 🌐 官网：https://www.lyfrp.cn' >> /tmp/template.txt
-          echo '- 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues' >> /tmp/template.txt
-          echo '- 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/discussions' >> /tmp/template.txt
-          echo '- 📧 邮箱：1263115878@qq.com' >> /tmp/template.txt
-          echo '- 💬 QQ群：882670857' >> /tmp/template.txt
-          echo '' >> /tmp/template.txt
-          echo '**感谢使用 LingYunFrp！**' >> /tmp/template.txt
-
-          # 替换占位符
-          NOTES=$(cat /tmp/template.txt | sed "s/{{VERSION}}/${VERSION}/g" | sed "s/{{BUILD_DATE}}/${BUILD_DATE}/g" | sed "s/{{CHANGES}}/${CHANGES}/g")
-
+          # 构建 Release Notes（精简版）
+          NOTES=$(cat <<'EOF'
+          ## LingYunFrp {{VERSION}} ({{BUILD_DATE}})
+          
+          ### 🔄 更新日志
+          
+          {{CHANGES}}
+          
+          ---
+          
+          ### 📦 下载说明
+          
+          根据您的系统选择对应的安装包：
+          
+          | 平台 | 架构 | 安装包 |
+          |------|------|--------|
+          | Windows | x64 | `.msi` / `.exe` |
+          | Windows | x86 | `.msi` / `.exe` |
+          | Windows | ARM64 | `.msi` / `.exe` |
+          | macOS | x64 | `.dmg` |
+          | macOS | ARM64 | `.dmg` |
+          | macOS | Universal | `.dmg` |
+          | Linux | x64 | `.deb` / `.AppImage` / `.rpm` |
+          | Linux | ARM64 | `.deb` / `.AppImage` / `.rpm` |
+          
+          ### 📝 快速安装
+          
+          **Debian/Ubuntu:**
+          ```bash
+          sudo dpkg -i LingYunFrp_{{VERSION}}_amd64.deb
+          sudo apt-get install -f
+          ```
+          
+          **macOS:**
+          双击 `.dmg` 文件，将应用拖入 Applications 文件夹
+          
+          **Windows:**
+          双击 `.msi` 或 `.exe` 安装包，按提示完成安装
+          
+          ### 💬 反馈与支持
+          
+          - 🐛 问题反馈：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/issues
+          - 💬 社区讨论：https://github.com/YCLY-IT/LingYunFrp-Official-Launcher/discussions
+          - 📧 邮箱：1263115878@qq.com
+          - 💬 QQ群：882670857
+          
+          **感谢使用 LingYunFrp！**
+          EOF
+          )
+          
+          # 替换占位符（去掉 v 前缀用于文件名）
+          VERSION_NO_V=$(echo "$VERSION" | sed 's/^v//')
+          NOTES="${NOTES//\{\{VERSION\}\}/${VERSION}}"
+          NOTES="${NOTES//\{\{VERSION_NO_V\}\}/${VERSION_NO_V}}"
+          NOTES="${NOTES//\{\{BUILD_DATE\}\}/${BUILD_DATE}}"
+          NOTES="${NOTES//\{\{CHANGES\}\}/${CHANGES}}"
+          
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           echo "$NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
-  # ... 构建 jobs 保持不变 ...
 
   build-macos:
     needs: prepare
